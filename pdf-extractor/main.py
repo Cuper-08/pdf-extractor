@@ -77,6 +77,7 @@ async def extract_pdf(file: UploadFile = File(...)):
 
         total_pages = len(doc)
         full_text = "".join(doc[i].get_text() for i in range(total_pages))
+        # Close document right after extraction — before any processing
         doc.close()
 
         total_chars = len(full_text)
@@ -86,6 +87,7 @@ async def extract_pdf(file: UploadFile = File(...)):
                 detail="PDF has no extractable text (may be scanned/image-based)",
             )
 
+        # Calculate BEFORE doc is needed again (doc is already closed — use saved total_pages)
         raw_chunks = smart_split(full_text)
         total_chunks = len(raw_chunks)
         chars_per_page = total_chars / max(total_pages, 1)

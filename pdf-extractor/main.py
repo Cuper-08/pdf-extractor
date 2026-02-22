@@ -7,8 +7,15 @@ import fitz  # PyMuPDF
 app = FastAPI(title="PDF Extractor Async", version="2.0.0")
 
 # Supabase config via environment variables
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://zcoixlvbkssvuxamzwvs.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+SUPABASE_URL = os.environ.get("SUPABASE_URL") or "https://zcoixlvbkssvuxamzwvs.supabase.co"
+# Supports both service_role key (prod) and anon key (RLS disabled, dev)
+# Using `or` to handle empty strings (os.environ.get returns "" if var is set but empty)
+_ANON_FALLBACK = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpjb2l4bHZia3NzdnV4YW16d3ZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkzOTYyNzIsImV4cCI6MjA4NDk3MjI3Mn0.BVPwqGMc7RhqRSOjnqIsZjwhe4Ls9pf9aajX-by-98M"
+SUPABASE_KEY = (
+    os.environ.get("SUPABASE_SERVICE_KEY")
+    or os.environ.get("SUPABASE_ANON_KEY")
+    or _ANON_FALLBACK
+)
 
 CHUNK_SIZE = 10000  # Target characters per chunk
 

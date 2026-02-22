@@ -8,6 +8,7 @@ import requests
 import fitz  # PyMuPDF
 import pandas as pd
 import customtkinter as ctk
+import ctypes  # << Necessário para forçar o ícone na barra de tarefas do Windows
 from tkinter import filedialog, messagebox
 
 # ==========================================
@@ -40,13 +41,26 @@ def save_config(config_data):
 def get_hardware_id():
     """Gera um identificador único baseada na placa-mãe/processador (Apenas Windows)"""
     try:
-        # Comando CMD que extrai o UUID (Número Único da Placa Mãe)
-        output = subprocess.check_output('wmic csproduct get uuid', shell=True).decode().strip().split('\n')
-        hwid = output[1].strip()
-        return hwid
+        # Tenta PowerShell primeiro (recomendado para Windows 11 que depreciou o wmic nativo)
+        cmd = ['powershell', '-NoProfile', '-Command', '(Get-CimInstance -Class Win32_ComputerSystemProduct).UUID']
+        output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+        if output:
+            return output
     except Exception:
-        # Fallback de segurança se houver falha de leitura (ex: não for administrador)
-        return "UNKNOWN_HWID_FALLBACK"
+        pass
+        
+    try:
+        # Fallback de segurança CMD antigo, mas sem poluir o console com mensagem vermelha
+        output = subprocess.check_output('wmic csproduct get uuid', shell=True, stderr=subprocess.DEVNULL).decode().strip().split('\n')
+        hwid = output[1].strip()
+        if hwid:
+            return hwid
+    except Exception:
+        pass
+        
+    # Ultimo recurso se todas as permissões do Windows falharem (Usa a Placa de Rede MAC)
+    import uuid
+    return str(uuid.getnode())
 
 def validate_license(license_key):
     """Bate no Supabase, verifica se a licença é válida e casa com o Computador Atual."""
@@ -203,12 +217,16 @@ class AppExtratorPDF(ctk.CTk):
         self.geometry("650x550")
         self.resizable(False, False)
         
-        # === Carga da Logo Personalizada ===
+        # === Carga da Logo Personalizada (Titlebar + Barra de Tarefas) ===
         try:
-            # Resolve o path para quando rodar via script OU via .exe (PyInstaller)
             bundle_dir = getattr(sys, '_MEIPASS', os.path.abspath(os.path.dirname(__file__)))
             icon_path = os.path.join(bundle_dir, "logo_extrator.ico")
             self.iconbitmap(icon_path)
+            
+            # Força o Windows a entender que este App tem uma identidade única na Barra de Tarefas
+            myappid = 'antigravity.apexextractor.pro.1.0'
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            
         except Exception as e:
             pass # Se não achar o arquivo de ícone no ambiente local/empacotado, silencia
             
@@ -368,7 +386,18 @@ class AppExtratorPDF(ctk.CTk):
             messagebox.showwarning("Aviso", "Por favor, selecione um arquivo PDF.")
             return
 
-        self.start_btn.configure(state="disabled", text="⏳ EXTUINDO DADOS...")
+        # === Trava Militar Anti-Malandragem ===
+        # Revalida silenciosamente a licença antes de cada extração pro caso do admin ter cancelado
+        self.start_btn.configure(state="disabled", text="🛡️ Verificando Licença Criptografada...")
+        self.update()
+        
+        chave_licenca = self.config_data.get("license_key", "")
+        sucesso, msg_licenca = validate_license(chave_licenca)
+        if not sucesso:
+            messagebox.showerror("Acesso Revogado", f"Acesso Negado: Sua licença foi cancelada, suspensa ou não existe mais no servidor.\nO aplicativo será encerrado de forma forçada imediatamente.\n\nMotivo do Banco de Dados: {msg_licenca}")
+            sys.exit(0)  # Mata a aplicação instantaneamente
+            
+        self.start_btn.configure(state="disabled", text="⏳ EXTRAINDO DADOS...")
         self.is_running = True
         
         self.log_text.configure(state="normal")

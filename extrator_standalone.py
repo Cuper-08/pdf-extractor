@@ -177,6 +177,38 @@ def extract_from_gemini(text_content, api_key):
     except (KeyError, IndexError):
         raise Exception(f"Resposta inesperada do Gemini:\n{json.dumps(data, indent=2)}")
 
+def extract_from_openai(text_content, api_key):
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT
+            },
+            {
+                "role": "user",
+                "content": f"Extraia os trabalhos deste texto:\n\n{text_content}"
+            }
+        ],
+        "temperature": 0.1
+    }
+    
+    response = requests.post(url, headers=headers, json=payload, timeout=120)
+    if response.status_code != 200:
+        raise Exception(f"Erro da API da OpenAI (HTTP {response.status_code}): {response.text}")
+        
+    data = response.json()
+    try:
+        return data['choices'][0]['message']['content']
+    except (KeyError, IndexError):
+        raise Exception(f"Resposta inesperada da OpenAI:\n{json.dumps(data, indent=2)}")
+
 def parse_markdown_table_to_dicts(markdown_text):
     """Converte a string de tabela Markdown retornada pela LLM em JSON."""
     linhas = markdown_text.split('\n')
@@ -287,11 +319,20 @@ class AppExtratorPDF(ctk.CTk):
 
     # --- TELA PRINCIPAL DO EXTRATOR ---
     def mostrar_tela_principal(self):
-        # Frame de Configuração da API Gemini
+        # Frame de Configuração da API
         api_frame = ctk.CTkFrame(self, fg_color="transparent")
         api_frame.pack(fill="x", padx=20, pady=(20, 10))
         
-        ctk.CTkLabel(api_frame, text="🔑 Google Gemini API Key:", font=ctk.CTkFont(weight="bold")).pack(anchor="w")
+        provider_frame = ctk.CTkFrame(api_frame, fg_color="transparent")
+        provider_frame.pack(fill="x", pady=(0, 5))
+        ctk.CTkLabel(provider_frame, text="🤖 Provedor de IA:", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(0, 10))
+        
+        self.provider_var = ctk.StringVar(value=self.config_data.get("ai_provider", "Gemini"))
+        self.provider_menu = ctk.CTkOptionMenu(provider_frame, values=["Gemini", "OpenAI"], variable=self.provider_var, command=self.on_provider_change)
+        self.provider_menu.pack(side="left")
+        
+        self.lbl_api = ctk.CTkLabel(api_frame, text="🔑 Chave de API:", font=ctk.CTkFont(weight="bold"))
+        self.lbl_api.pack(anchor="w")
         
         key_container = ctk.CTkFrame(api_frame, fg_color="transparent")
         key_container.pack(fill="x", pady=(5, 0))
@@ -299,15 +340,11 @@ class AppExtratorPDF(ctk.CTk):
         self.api_entry = ctk.CTkEntry(key_container, show="*", width=480)
         self.api_entry.pack(side="left")
         
-        self.btn_alterar_chave = ctk.CTkButton(key_container, text="Salvar Ativa", command=self.salvar_chave_gemini, width=100)
+        self.btn_alterar_chave = ctk.CTkButton(key_container, text="Salvar Ativa", command=self.salvar_chave_api, width=100)
         self.btn_alterar_chave.pack(side="right")
         
-        # Preenche com chave salva e trava para facilitar se já existir
-        saved_key = self.config_data.get("gemini_api_key", "")
-        if saved_key:
-            self.api_entry.insert(0, saved_key)
-            self.api_entry.configure(state="disabled")
-            self.btn_alterar_chave.configure(text="Alterar", fg_color="gray", hover_color="darkgray")
+        # Chamada inicial para preencher a chave correta
+        self.on_provider_change(self.provider_var.get())
 
         # Frame PDF
         pdf_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -339,21 +376,40 @@ class AppExtratorPDF(ctk.CTk):
         self.start_btn = ctk.CTkButton(self, text="▶ INICIAR EXTRAÇÃO AUTOMÁTICA", command=self.iniciar_extracao_thread, height=50, font=ctk.CTkFont(size=14, weight="bold"), fg_color="#10b981", hover_color="#059669")
         self.start_btn.pack(fill="x", padx=20, pady=(0, 20))
 
-    def salvar_chave_gemini(self):
+    def on_provider_change(self, choice):
+        self.config_data["ai_provider"] = choice
+        save_config(self.config_data)
+        
+        self.lbl_api.configure(text=f"🔑 {choice} API Key:")
+        
+        self.api_entry.configure(state="normal")
+        self.api_entry.delete(0, "end")
+        
+        key_name = "gemini_api_key" if choice == "Gemini" else "openai_api_key"
+        saved_key = self.config_data.get(key_name, "")
+        
+        if saved_key:
+            self.api_entry.insert(0, saved_key)
+            self.api_entry.configure(state="disabled")
+            self.btn_alterar_chave.configure(text="Alterar", fg_color="gray", hover_color="darkgray")
+        else:
+            self.btn_alterar_chave.configure(text="Salvar Ativa", fg_color=["#3a7ebf", "#1f538d"], hover_color=["#325882", "#14375e"])
+
+    def salvar_chave_api(self):
         estado_atual = self.api_entry.cget("state")
         if estado_atual == "disabled":
-            # Botão "Alterar" foi clicado
             self.api_entry.configure(state="normal")
             self.btn_alterar_chave.configure(text="Salvar", fg_color="#3b82f6", hover_color="#2563eb")
         else:
-            # Botão "Salvar" foi clicado
             nova_chave = self.api_entry.get().strip()
             if nova_chave:
-                self.config_data["gemini_api_key"] = nova_chave
+                provider = self.provider_var.get()
+                key_name = "gemini_api_key" if provider == "Gemini" else "openai_api_key"
+                self.config_data[key_name] = nova_chave
                 save_config(self.config_data)
                 self.api_entry.configure(state="disabled")
                 self.btn_alterar_chave.configure(text="Alterar", fg_color="gray", hover_color="darkgray")
-                messagebox.showinfo("Salvo", "Chave do Gemini salva com sucesso!")
+                messagebox.showinfo("Salvo", f"Chave da {provider} salva com sucesso!")
             else:
                 messagebox.showerror("Erro", "A chave não pode estar vazia.")
 
@@ -377,9 +433,12 @@ class AppExtratorPDF(ctk.CTk):
              messagebox.showwarning("Aviso", "Por favor, Salve sua Chave de API clicando no botão ao lado antes de continuar.")
              return
              
-        api_key_salva = self.config_data.get("gemini_api_key", "").strip()
+        provider = self.provider_var.get()
+        key_name = "gemini_api_key" if provider == "Gemini" else "openai_api_key"
+        api_key_salva = self.config_data.get(key_name, "").strip()
+        
         if not api_key_salva:
-            messagebox.showwarning("Aviso", "Por favor, insira a Chave de API do Gemini (Começa com AIza...).")
+            messagebox.showwarning("Aviso", f"Por favor, insira a Chave de API da {provider}.")
             return
             
         if not self.pdf_path_var.get().strip():
@@ -408,11 +467,11 @@ class AppExtratorPDF(ctk.CTk):
         self.todos_projetos = []
         
         # Thread para IA
-        t = threading.Thread(target=self.processar_pdf, args=(api_key_salva,))
+        t = threading.Thread(target=self.processar_pdf, args=(api_key_salva, provider))
         t.daemon = True
         t.start()
 
-    def processar_pdf(self, api_key):
+    def processar_pdf(self, api_key, provider):
         try:
             pdf_path = self.pdf_path_var.get()
             chunk_size = 40
@@ -423,7 +482,7 @@ class AppExtratorPDF(ctk.CTk):
             
             total_fatias = (total_pages + chunk_size - 1) // chunk_size
             
-            self.log(f"Total de Páginas: {total_pages} | Serão enviadas {total_fatias} fatias para o Gemini Flash.")
+            self.log(f"Total de Páginas: {total_pages} | Serão enviadas {total_fatias} fatias para {provider}.")
             
             base_name = os.path.splitext(os.path.basename(pdf_path))[0]
             base_dir = os.path.dirname(pdf_path)
@@ -457,8 +516,11 @@ class AppExtratorPDF(ctk.CTk):
                 
                 for tentativa in range(max_retries):
                     try:
-                        self.log(f"  -> Chamando a inteligência Gemini Flash (tentativa {tentativa+1}/{max_retries})...")
-                        tabela_markdown = extract_from_gemini(texto_fatia, api_key)
+                        self.log(f"  -> Chamando a inteligência {provider} (tentativa {tentativa+1}/{max_retries})...")
+                        if provider == "Gemini":
+                            tabela_markdown = extract_from_gemini(texto_fatia, api_key)
+                        else:
+                            tabela_markdown = extract_from_openai(texto_fatia, api_key)
                         
                         novos_projetos = parse_markdown_table_to_dicts(tabela_markdown)
                         
@@ -485,7 +547,7 @@ class AppExtratorPDF(ctk.CTk):
                         self.log(f"  -> ERRO API: {erro_msg}")
                         if tentativa < max_retries - 1:
                             # Tática de recuo dinâmico: se a API bloqueou por excesso de velocidade (Rate Limiting), extrai o tempo exato de espera retornado pela API.
-                            if "429" in erro_msg or "quota" in erro_msg.lower() or "too many requests" in erro_msg.lower():
+                            if "429" in erro_msg or "quota" in erro_msg.lower() or "too many requests" in erro_msg.lower() or "rate_limit_exceeded" in erro_msg.lower() or "insufficient_quota" in erro_msg.lower():
                                 wait_time = 60 # Tempo padrão de recuo (1 minuto) se não conseguir ler do erro
                                 import re
                                 match = re.search(r"retry in ([\d\.]+)s", erro_msg)
@@ -496,8 +558,13 @@ class AppExtratorPDF(ctk.CTk):
                                     match_json = re.search(r'"retryDelay":\s*"(\d+)s"', erro_msg)
                                     if match_json:
                                         wait_time = int(match_json.group(1)) + 2
+                                    else:
+                                        # Fallback para OpenAI Limit Try again em xs
+                                        match_openai = re.search(r"Please try again in (\d+(\.\d+)?)s", erro_msg)
+                                        if match_openai:
+                                            wait_time = int(float(match_openai.group(1))) + 2
 
-                                self.log(f"  -> Limite de Frequência do Google (429) detectado! Pausando por {wait_time} segundos conforme exigido pela API...")
+                                self.log(f"  -> Limite de Frequência da API (429) detectado! Pausando por {wait_time} segundos conforme exigido...")
                                 time.sleep(wait_time)
                             else:
                                 self.log("  -> Aguardando 5 segundos para tentar novamente...")

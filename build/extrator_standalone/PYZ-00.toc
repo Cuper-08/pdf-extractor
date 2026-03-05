@@ -249,6 +249,238 @@
    'PYMODULE'),
   ('ctypes.util', 'C:\\Python314\\Lib\\ctypes\\util.py', 'PYMODULE'),
   ('ctypes.wintypes', 'C:\\Python314\\Lib\\ctypes\\wintypes.py', 'PYMODULE'),
+  ('customtkinter',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados N8N\\.venv\\Lib\\site-packages\\customtkinter\\__init__.py',
+   'PYMODULE'),
+  ('customtkinter.windows',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\__init__.py',
+   'PYMODULE'),
+  ('customtkinter.windows.ctk_input_dialog',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\ctk_input_dialog.py',
+   'PYMODULE'),
+  ('customtkinter.windows.ctk_tk',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\ctk_tk.py',
+   'PYMODULE'),
+  ('customtkinter.windows.ctk_toplevel',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\ctk_toplevel.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\__init__.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.appearance_mode',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\appearance_mode\\__init__.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.appearance_mode.appearance_mode_base_class',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\appearance_mode\\appearance_mode_base_class.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.appearance_mode.appearance_mode_tracker',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\appearance_mode\\appearance_mode_tracker.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.core_rendering',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\core_rendering\\__init__.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.core_rendering.ctk_canvas',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\core_rendering\\ctk_canvas.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.core_rendering.draw_engine',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\core_rendering\\draw_engine.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.core_widget_classes',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\core_widget_classes\\__init__.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.core_widget_classes.ctk_base_class',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\core_widget_classes\\ctk_base_class.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.core_widget_classes.dropdown_menu',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\core_widget_classes\\dropdown_menu.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_button',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_button.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_checkbox',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_checkbox.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_combobox',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_combobox.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_entry',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_entry.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_frame',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_frame.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_label',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_label.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_optionmenu',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_optionmenu.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_progressbar',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_progressbar.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_radiobutton',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_radiobutton.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_scrollable_frame',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_scrollable_frame.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_scrollbar',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_scrollbar.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_segmented_button',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_segmented_button.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_slider',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_slider.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_switch',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_switch.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_tabview',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_tabview.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.ctk_textbox',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\ctk_textbox.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.font',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\font\\__init__.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.font.ctk_font',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\font\\ctk_font.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.font.font_manager',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\font\\font_manager.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.image',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\image\\__init__.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.image.ctk_image',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\image\\ctk_image.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.scaling',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\scaling\\__init__.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.scaling.scaling_base_class',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\scaling\\scaling_base_class.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.scaling.scaling_tracker',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\scaling\\scaling_tracker.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.theme',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\theme\\__init__.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.theme.theme_manager',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\theme\\theme_manager.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.utility',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\utility\\__init__.py',
+   'PYMODULE'),
+  ('customtkinter.windows.widgets.utility.utility_functions',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados '
+   'N8N\\.venv\\Lib\\site-packages\\customtkinter\\windows\\widgets\\utility\\utility_functions.py',
+   'PYMODULE'),
+  ('darkdetect',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados N8N\\.venv\\Lib\\site-packages\\darkdetect\\__init__.py',
+   'PYMODULE'),
+  ('darkdetect._dummy',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados N8N\\.venv\\Lib\\site-packages\\darkdetect\\_dummy.py',
+   'PYMODULE'),
+  ('darkdetect._linux_detect',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados N8N\\.venv\\Lib\\site-packages\\darkdetect\\_linux_detect.py',
+   'PYMODULE'),
+  ('darkdetect._mac_detect',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados N8N\\.venv\\Lib\\site-packages\\darkdetect\\_mac_detect.py',
+   'PYMODULE'),
+  ('darkdetect._windows_detect',
+   'c:\\Users\\Cuper\\OneDrive\\Documents\\Projetos Antigravity\\Extrator de '
+   'dados N8N\\.venv\\Lib\\site-packages\\darkdetect\\_windows_detect.py',
+   'PYMODULE'),
   ('dataclasses', 'C:\\Python314\\Lib\\dataclasses.py', 'PYMODULE'),
   ('datetime', 'C:\\Python314\\Lib\\datetime.py', 'PYMODULE'),
   ('dateutil',
@@ -3802,6 +4034,7 @@
   ('tkinter.filedialog',
    'C:\\Python314\\Lib\\tkinter\\filedialog.py',
    'PYMODULE'),
+  ('tkinter.font', 'C:\\Python314\\Lib\\tkinter\\font.py', 'PYMODULE'),
   ('tkinter.messagebox',
    'C:\\Python314\\Lib\\tkinter\\messagebox.py',
    'PYMODULE'),

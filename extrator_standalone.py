@@ -484,10 +484,21 @@ class AppExtratorPDF(ctk.CTk):
                         erro_msg = str(e)
                         self.log(f"  -> ERRO API: {erro_msg}")
                         if tentativa < max_retries - 1:
-                            # Tática industrial de recuo: se a API bloqueou por excesso de velocidade (Rate Limiting), paramos por vitais 15-20 segundos.
+                            # Tática de recuo dinâmico: se a API bloqueou por excesso de velocidade (Rate Limiting), extrai o tempo exato de espera retornado pela API.
                             if "429" in erro_msg or "quota" in erro_msg.lower() or "too many requests" in erro_msg.lower():
-                                self.log("  -> Limite de Frequência do Google (429) detectado. Pausa de resfriamento de 15s...")
-                                time.sleep(15)
+                                wait_time = 60 # Tempo padrão de recuo (1 minuto) se não conseguir ler do erro
+                                import re
+                                match = re.search(r"retry in ([\d\.]+)s", erro_msg)
+                                if match:
+                                    wait_time = int(float(match.group(1))) + 2 # Pega o tempo do log e adiciona 2s de segurança
+                                else:
+                                    # Fallback para o campo JSON
+                                    match_json = re.search(r'"retryDelay":\s*"(\d+)s"', erro_msg)
+                                    if match_json:
+                                        wait_time = int(match_json.group(1)) + 2
+
+                                self.log(f"  -> Limite de Frequência do Google (429) detectado! Pausando por {wait_time} segundos conforme exigido pela API...")
+                                time.sleep(wait_time)
                             else:
                                 self.log("  -> Aguardando 5 segundos para tentar novamente...")
                                 time.sleep(5)

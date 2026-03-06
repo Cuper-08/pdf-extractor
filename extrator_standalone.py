@@ -110,20 +110,31 @@ def validate_license(license_key):
 # ==========================================
 # CÓDIGO DO MOTOR DE EXTRAÇÃO E INTELIGÊNCIA
 # ==========================================
-SYSTEM_PROMPT = """Você é um especialista em extração de dados acadêmicos de PDFs.
-Sua única tarefa é extrair os seguintes 3 dados exatos e organizá-los OBRIGATORIAMENTE em uma única tabela Markdown:
-- Título do Trabalho
-- Nome do Autor (Separado, 1 por linha - verifique bem os números sobrescritos e ordens)
-- E-mail do Autor (Encontre o e-mail correspondente ao autor no rodapé ou bloco de contatos, usando a proximidade ou número sobrescrito idêntico)
+SYSTEM_PROMPT = """
+Você é um robô especialista em extração de dados de anais de congressos e periódicos acadêmicos em PDF.
+Sua missão: extrair TÍTULO, NOME DO AUTOR e E-MAIL de cada trabalho acadêmico e retornar EXCLUSIVAMENTE uma tabela Markdown.
 
-REGRAS ESTRITAS DE FORMATAÇÃO DA TABELA (LEIA COM ATENÇÃO):
-1. A tabela DEVE obrigatoriamente ter a linha divisória com os pipes e traços exatos: `|---|---|---|`
-2. O cabeçalho deve ser EXATAMENTE: `| Títulos dos Trabalhos | Nomes dos Autores | E-mails dos Autores |`
-3. Se um trabalho tiver 4 autores, mas apenas 2 e-mails na página, você DEVE repetir o Título em 4 linhas, colocar os 4 nomes na segunda coluna, e deixar o campo E-mail VAZIO para os autores que não possuem e-mail listado. Nunca agrupe múltiplos autores ou e-mails.
-4. ATENÇÃO AOS SOBRESCRITOS: É crucial que você vincule o e-mail correto ao autor correto! Frequentemente os autores possuem números (ex: Maria², Pedro³). Você DEVE procurar no texto os e-mails associados a esses mesmos números (ex: 2 maria@email.com, 3 pedro@email.com) e pareá-los perfeitamente na tabela, mesmo se o e-mail estiver no fim da página!
-5. NUNCA invente e-mails ou nomes. Extraia apenas o que está no texto fornecido.
-6. Se for apenas um sumário (índice), ou capa, ignore-o.
-7. A sua resposta DEVE conter APENAS a tabela markdown, sem introduções, aspas soltas ou saudações. NUNCA quebre a estrutura da tabela.
+=== PADRÃO DO DOCUMENTO (MUITO IMPORTANTE) ===
+Os documentos seguem este layout típico:
+  1. TÍTULO DO TRABALHO: em MAIÚSCULAS e/ou negrito, centralizado no topo da 1ª página do artigo.
+  2. AUTORES: logo abaixo do título, com números sobrescritos (ex: "Maria Silva¹, João Santos²").
+  3. E-MAILS: no RODAPÉ da mesma página (ou rodapé de página posterior do mesmo artigo).
+     O rodapé começa com o número sobrescrito seguido da afiliação e termina com o e-mail:
+     Exemplo de rodapé: "¹ Mestranda em Educação, UEFS. maria.silva@uefs.br"
+     Exemplo de rodapé: "2. Doutorando em Economia, UFBA. joao@ufba.br"
+
+=== REGRA DE OURO — UMA LINHA POR AUTOR ===
+Se um trabalho tiver 4 autores, você DEVE gerar 4 linhas na tabela — uma para cada autor.
+O título do trabalho deve ser REPETIDO em cada linha. NUNCA agrupe autores na mesma célula.
+
+=== REGRAS OBRIGATÓRIAS DE FORMATAÇÃO ===
+1. Cabeçalho EXATO: `| Títulos dos Trabalhos | Nomes dos Autores | E-mails dos Autores |`
+2. Linha separadora EXATA: `|---|---|---|`
+3. REMOVA quebras de linha (Enter) de dentro do TÍTULO. O título deve ser uma linha contínua.
+4. Associe e-mails aos autores pelo índice numérico sobrescrito (¹²³⁴ ou 1.2.3.4 ou (1)(2)).
+5. Se o e-mail NÃO aparece neste trecho, deixe a célula vazia (não invente).
+6. Ignore sumários, capas, referências bibliográficas e agradecimentos.
+7. Sua resposta deve conter SOMENTE a tabela Markdown — sem texto antes ou depois.
 """
 
 def extract_from_gemini(text_content, api_key):
@@ -145,7 +156,7 @@ def extract_from_gemini(text_content, api_key):
     if not target_model:
         flash_models = [m for m in available_models if 'flash' in m.lower()]
         if flash_models:
-            target_model = flash_models[-1]
+            target_model = flash_models[0]  # Pega o mais recente (não o último/mais antigo)
         else:
             raise Exception(f"Nenhum modelo 'Flash' encontrado na sua conta. Modelos disponíveis na chave: {available_models}")
 
@@ -237,8 +248,140 @@ def parse_markdown_table_to_dicts(markdown_text):
 
 
 # ==========================================
+# FUNÇÕES DE PÓS-PROCESSAMENTO
+# ==========================================
+import re as _re
+
+def consolidar_projetos(projetos):
+    """
+    Merge inteligente: une linhas com mesmo título+autor,
+    priorizando o e-mail preenchido quando chunks diferentes
+    capturam a mesma pessoa em momentos distintos.
+    """
+    mapa = {}
+    chave_titulo = "Títulos dos Trabalhos"
+    chave_autor  = "Nomes dos Autores"
+    chave_email  = "E-mails dos Autores"
+    
+    for proj in projetos:
+        titulo = (proj.get(chave_titulo) or "").strip()
+        autor  = (proj.get(chave_autor)  or "").strip()
+        email  = (proj.get(chave_email)  or "").strip()
+        chave_composta = f"{titulo.lower()}|||{autor.lower()}"
+        
+        if chave_composta not in mapa:
+            mapa[chave_composta] = {chave_titulo: titulo, chave_autor: autor, chave_email: email}
+        else:
+            if email and not mapa[chave_composta][chave_email]:
+                mapa[chave_composta][chave_email] = email
+    
+    return list(mapa.values())
+
+
+def expandir_por_autor(projetos):
+    """
+    Caso a IA retorne múltiplos autores agrupados numa célula
+    (ex: 'Maria Silva, João Santos'), desdobra em linhas individuais.
+    Remove números/símbolos sobrescritos dos nomes (¹²³⁴⁵⁶⁷⁸⁹⁰ e variantes).
+    """
+    chave_titulo = "Títulos dos Trabalhos"
+    chave_autor  = "Nomes dos Autores"
+    chave_email  = "E-mails dos Autores"
+    sobrescritos = str.maketrans("", "", "¹²³⁴⁵⁶⁷⁸⁹⁰₁₂₃₄₅₆₇₈₉₀")
+    
+    expandido = []
+    for proj in projetos:
+        titulo  = (proj.get(chave_titulo) or "").strip()
+        autores = (proj.get(chave_autor)  or "").strip()
+        emails  = (proj.get(chave_email)  or "").strip()
+        
+        # Remove sobrescritos dos nomes
+        autores_limpos = autores.translate(sobrescritos).strip()
+        
+        # Separa múltiplos autores (separados por vírgula ou ponto e vírgula)
+        lista_autores = [a.strip() for a in _re.split(r"[;,]", autores_limpos) if a.strip()]
+        # Separa múltiplos e-mails na mesma célula
+        lista_emails  = [e.strip() for e in _re.split(r"[;,\s]+", emails) if "@" in e]
+        
+        if len(lista_autores) <= 1:
+            # Já está no formato certo (1 autor por linha)
+            expandido.append({
+                chave_titulo: titulo,
+                chave_autor:  autores_limpos or autores,
+                chave_email:  emails
+            })
+        else:
+            # Desdobra: um registro por autor
+            for i, autor in enumerate(lista_autores):
+                email_autor = lista_emails[i] if i < len(lista_emails) else ""
+                expandido.append({
+                    chave_titulo: titulo,
+                    chave_autor:  autor,
+                    chave_email:  email_autor
+                })
+    
+    return expandido
+
+# ==========================================
+# FUNÇÃO DE SALVAMENTO COM FORMATAÇÃO
+# ==========================================
+def salvar_excel_formatado(projetos, filepath):
+    """
+    Salva a lista de projetos em Excel com:
+    - Largura de coluna automática (ajusta ao conteúdo mais longo)
+    - Cabeçalho em negrito
+    - Fallback automático para arquivo de backup se o original estiver aberto
+    Lança PermissionError com mensagem amigável se ambos falharem.
+    """
+    import openpyxl
+    from openpyxl.styles import Font
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Resultados"
+
+    colunas = ["Títulos dos Trabalhos", "Nomes dos Autores", "E-mails dos Autores"]
+
+    # Cabeçalho em negrito
+    for col_idx, nome_col in enumerate(colunas, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=nome_col)
+        cell.font = Font(bold=True)
+
+    # Dados
+    for row_idx, proj in enumerate(projetos, start=2):
+        ws.cell(row=row_idx, column=1, value=proj.get(colunas[0], ""))
+        ws.cell(row=row_idx, column=2, value=proj.get(colunas[1], ""))
+        ws.cell(row=row_idx, column=3, value=proj.get(colunas[2], ""))
+
+    # Ajuste automático de largura de coluna
+    for col in ws.columns:
+        max_len = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            try:
+                if cell.value:
+                    max_len = max(max_len, len(str(cell.value)))
+            except Exception:
+                pass
+        ws.column_dimensions[col_letter].width = min(max_len + 4, 80)
+
+    # Tenta salvar no caminho original; fallback para _backup se aberto
+    try:
+        wb.save(filepath)
+    except PermissionError:
+        backup_path = filepath.replace(".xlsx", "_backup.xlsx")
+        try:
+            wb.save(backup_path)
+            raise PermissionError(
+                f"Arquivo Excel estava aberto. Dados salvos em:\n{backup_path}"
+            )
+        except Exception as e2:
+            raise PermissionError(f"Não foi possível salvar o Excel: {e2}")
+
+# ==========================================
 # INTERFACE GRÁFICA (GUI CustomTkinter)
 # ==========================================
+
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
@@ -474,7 +617,8 @@ class AppExtratorPDF(ctk.CTk):
     def processar_pdf(self, api_key, provider):
         try:
             pdf_path = self.pdf_path_var.get()
-            chunk_size = 40
+            chunk_size  = 30  # Reduzido de 40 → mais preciso por artigo
+            overlap     = 5   # Sobreposição: evita cortar rodapé de e-mails
             
             self.log(f"Abrindo arquivo PDF...")
             doc = fitz.open(pdf_path)
@@ -494,13 +638,15 @@ class AppExtratorPDF(ctk.CTk):
                 if not self.is_running:
                     self.log("Processo cancelado!")
                     break
-                    
+                
+                # Início com overlap: volta 'overlap' páginas para pegar rodapés do chunk anterior
+                start_com_overlap = max(0, start_page - overlap)
                 end_page = min(start_page + chunk_size, total_pages) - 1
                 fatia_atual += 1
-                self.log(f"\n[{fatia_atual}/{total_fatias}] Lendo páginas {start_page+1} até {end_page+1}...")
+                self.log(f"\n[{fatia_atual}/{total_fatias}] Lendo páginas {start_com_overlap+1} até {end_page+1}...")
                 
                 texto_fatia = ""
-                for page_num in range(start_page, end_page + 1):
+                for page_num in range(start_com_overlap, end_page + 1):
                     page = doc.load_page(page_num)
                     texto_fatia += page.get_text("text") + "\n\n"
                     
@@ -525,16 +671,19 @@ class AppExtratorPDF(ctk.CTk):
                         novos_projetos = parse_markdown_table_to_dicts(tabela_markdown)
                         
                         if novos_projetos:
-                            self.todos_projetos.extend(novos_projetos)
-                            self.log(f"  -> SUCESSO! {len(novos_projetos)} trabalhos identificados.")
+                            # Etapa 1: expande células com múltiplos autores em linhas individuais
+                            novos_expandidos = expandir_por_autor(novos_projetos)
+                            self.todos_projetos.extend(novos_expandidos)
+                            # Etapa 2: consolida duplicados (mesmo autor em chunks diferentes)
+                            self.todos_projetos = consolidar_projetos(self.todos_projetos)
+                            self.log(f"  -> SUCESSO! {len(novos_projetos)} trabalhos → {len(novos_expandidos)} linhas. Total: {len(self.todos_projetos)} (após deduplicação)")
                             
-                            df = pd.DataFrame(self.todos_projetos)
                             try:
-                                df.to_excel(excel_filename, index=False)
-                            except PermissionError:
-                                self.log(f"  -> AVISO: Excel aberto. Salvando num arquivo alternativo...")
-                                temp_filename = excel_filename.replace('.xlsx', '_copia_seguranca.xlsx')
-                                df.to_excel(temp_filename, index=False)
+                                salvar_excel_formatado(self.todos_projetos, excel_filename)
+                            except PermissionError as pe:
+                                self.log(f"  -> AVISO: {str(pe)}")
+                            except Exception as ee:
+                                self.log(f"  -> ERRO ao salvar Excel: {str(ee)}")
                                 
                         else:
                             self.log(f"  -> A IA analisou e não encontrou resultados com esse formato aqui.")

@@ -5,7 +5,7 @@ a = Analysis(
     ['extrator_standalone.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('logo_extrator.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,4 +35,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='logo_extrator.ico',
 )
+

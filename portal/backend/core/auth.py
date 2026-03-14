@@ -20,15 +20,18 @@ async def verify_token(authorization: str = Header(None)) -> str:
 
     token = authorization.removeprefix("Bearer ").strip()
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{SUPABASE_URL}/auth/v1/user",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "apikey": SUPABASE_ANON_KEY,
-            },
-            timeout=10,
-        )
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/auth/v1/user",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "apikey": SUPABASE_ANON_KEY,
+                },
+                timeout=10,
+            )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Serviço de autenticação indisponível: {e}")
 
     if resp.status_code != 200:
         raise HTTPException(status_code=401, detail="Token inválido ou expirado.")

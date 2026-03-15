@@ -36,10 +36,20 @@ def _current_month() -> str:
     return datetime.utcnow().strftime("%Y-%m")
 
 
+_db_client: httpx.AsyncClient | None = None
+
+
+def _get_db_client() -> httpx.AsyncClient:
+    """Cliente HTTP compartilhado para Supabase — evita TCP handshake a cada chamada."""
+    global _db_client
+    if _db_client is None or _db_client.is_closed:
+        _db_client = httpx.AsyncClient(timeout=httpx.Timeout(20.0))
+    return _db_client
+
+
 async def _rest(method: str, path: str, **kwargs) -> list | dict:
     url = f"{SUPABASE_URL}/rest/v1/{path}"
-    async with httpx.AsyncClient() as client:
-        resp = await client.request(method, url, headers=HEADERS, timeout=20, **kwargs)
+    resp = await _get_db_client().request(method, url, headers=HEADERS, timeout=20, **kwargs)
     resp.raise_for_status()
     if resp.content:
         return resp.json()

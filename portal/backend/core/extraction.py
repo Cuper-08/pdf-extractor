@@ -16,6 +16,7 @@ import os
 import re
 import json
 import asyncio
+import logging
 import unicodedata
 from io import BytesIO
 from typing import Optional, Callable, Awaitable
@@ -26,6 +27,8 @@ import pandas as pd
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from openpyxl.styles import Font, PatternFill, Alignment
 
+logger = logging.getLogger(__name__)
+
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
@@ -33,13 +36,12 @@ from openpyxl.styles import Font, PatternFill, Alignment
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 CHUNK_SIZE = 40_000        # chars por chunk (~10 páginas densas)
 CHUNK_OVERLAP = 2_000      # overlap entre chunks para não perder registros no limite
-MAX_CONCURRENT = 3         # chunks em paralelo — 5 causava burst de 429s no Gemini
+MAX_CONCURRENT = 2         # 2 paralelos + spacing garante ≤13 RPM no free tier Gemini
+REQUEST_SPACING = 4.0      # segundos de delay dentro do semáforo entre requests
 
 # ─────────────────────────────────────────────
 # HTTP CLIENT compartilhado (connection pool)
 # ─────────────────────────────────────────────
-# Criação per-call adicionava 200-500ms de TCP handshake em cada request.
-# Um único cliente com keepalive elimina esse overhead.
 
 _http_client: httpx.AsyncClient | None = None
 
@@ -49,7 +51,7 @@ def _get_http_client() -> httpx.AsyncClient:
     if _http_client is None or _http_client.is_closed:
         _http_client = httpx.AsyncClient(
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-            timeout=httpx.Timeout(65.0),
+            timeout=httpx.Timeout(120.0),
         )
     return _http_client
 
@@ -94,6 +96,7 @@ async def _get_gemini_model(api_key: str) -> str:
             flash = [m for m in available if "flash" in m.lower() and "001" not in m]
             model = flash[0] if flash else available[0]
 
+        logger.info("Gemini model selecionado: %s (de %d disponíveis)", model, len(available))
         _model_cache[api_key] = model
         return model
 
@@ -102,9 +105,8 @@ class GeminiRateLimitError(Exception):
     pass
 
 @retry(
-    # Pior caso: 5+10+20 = 35s por chunk (antes era 4+8+16+32+60 = 120s)
-    wait=wait_exponential(multiplier=2, min=5, max=30),
-    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=3, min=8, max=45),
+    stop=stop_after_attempt(4),
     retry=retry_if_exception_type((GeminiRateLimitError, httpx.ReadTimeout, httpx.ConnectError))
 )
 async def _call_gemini(system_prompt: str, user_text: str, api_key: str, response_json: bool = False) -> str:
@@ -119,24 +121,19 @@ async def _call_gemini(system_prompt: str, user_text: str, api_key: str, respons
         payload["generationConfig"]["responseMimeType"] = "application/json"
 
     client = _get_http_client()
-    resp = await client.post(url, json=payload, timeout=65.0)
+    resp = await client.post(url, json=payload, timeout=120.0)
 
     # Se modelo retornou 404 (descontinuado), limpa cache e tenta redescobrir
     if resp.status_code == 404:
         _model_cache.pop(api_key, None)
         model = await _get_gemini_model(api_key)
         url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={api_key}"
-        resp = await client.post(url, json=payload, timeout=65.0)
+        resp = await client.post(url, json=payload, timeout=120.0)
 
     if resp.status_code == 429 or resp.status_code >= 500:
-        # Respeita Retry-After do Gemini se disponível
-        retry_after = resp.headers.get("retry-after")
-        if retry_after:
-            try:
-                await asyncio.sleep(min(float(retry_after), 30))
-            except (ValueError, TypeError):
-                pass
-        raise GeminiRateLimitError(f"Rate limit or server error: {resp.status_code}")
+        # NÃO dormir aqui — tenacity já cuida do backoff exponencial.
+        # Dormir antes de raise causava double-sleep (Retry-After + tenacity).
+        raise GeminiRateLimitError(f"Gemini {resp.status_code} — rate limit ou erro de servidor")
 
     if resp.status_code != 200:
         raise Exception(f"Gemini error {resp.status_code}: {resp.text[:500]}")
@@ -249,13 +246,19 @@ def smart_split(full_text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHU
 
 
 async def _extract_chunk(chunk: str, schema_prompt: str, sem: asyncio.Semaphore) -> str:
+    """Extrai dados de um chunk com rate limiting via semáforo + spacing."""
     async with sem:
-        return await _call_gemini(
+        result = await _call_gemini(
             schema_prompt,
             f"Extraia os dados deste texto:\n\n{chunk}",
             GEMINI_API_KEY,
             response_json=True,
         )
+        # Rate limiting: mantém o slot ocupado por REQUEST_SPACING segundos
+        # para garantir que o próximo request não dispare imediatamente.
+        # Com MAX_CONCURRENT=2 e 4s spacing: ~13 RPM (abaixo do free tier 15 RPM).
+        await asyncio.sleep(REQUEST_SPACING)
+        return result
 
 
 async def process_pdf_extraction(
@@ -286,31 +289,41 @@ async def process_pdf_extraction(
     total = len(chunks)
     completed_count = 0
 
+    logger.info("PDF: %d chars → %d chunks (MAX_CONCURRENT=%d, SPACING=%.1fs)",
+                len(full_text), total, MAX_CONCURRENT, REQUEST_SPACING)
+
     # 3. Processa em paralelo com semáforo de rate limit + rastreio de progresso
     sem = asyncio.Semaphore(MAX_CONCURRENT)
 
-    async def _extract_with_progress(chunk: str) -> str:
+    async def _extract_with_progress(chunk: str, index: int) -> str | None:
+        """Processa um chunk e reporta progresso SEMPRE (sucesso ou falha)."""
         nonlocal completed_count
-        result = await _extract_chunk(chunk, schema_prompt, sem)
+        result = None
+        try:
+            result = await _extract_chunk(chunk, schema_prompt, sem)
+            logger.info("Chunk %d/%d concluído (%d chars)", index + 1, total, len(chunk))
+        except Exception as e:
+            logger.warning("Chunk %d/%d falhou: %s", index + 1, total, e)
+        # SEMPRE incrementa e reporta progresso — mesmo para chunks que falharam.
+        # Isso evita que a barra de progresso trave quando chunks falham.
         completed_count += 1
-        await asyncio.sleep(0.3)  # espaça requests para evitar burst 429
         if on_progress:
-            pct = min(99, int(completed_count / total * 100))  # 99% até salvar no DB
+            pct = min(99, int(completed_count / total * 100))
             try:
                 await on_progress(pct)
             except Exception:
-                pass  # progresso é best-effort
+                pass
         return result
 
-    tasks = [_extract_with_progress(chunk) for chunk in chunks]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    tasks = [_extract_with_progress(chunk, i) for i, chunk in enumerate(chunks)]
+    results = await asyncio.gather(*tasks)
 
-    # 4. Coleta registros (ignora chunks com erro)
+    # 4. Coleta registros (ignora chunks com erro — result é None)
     all_records: list[dict] = []
     for r in results:
-        if isinstance(r, Exception):
+        if r is None:
             continue  # chunk falhou — best effort
-            
+
         try:
             # remove markers markdown code se retornados erradamente
             clean_r = r.strip()
@@ -318,9 +331,9 @@ async def process_pdf_extraction(
                 clean_r = clean_r[7:]
             if clean_r.endswith("```"):
                 clean_r = clean_r[:-3]
-                
+
             records = json.loads(clean_r.strip())
-            
+
             if isinstance(records, list):
                 all_records.extend(records)
             elif isinstance(records, dict):
@@ -331,9 +344,8 @@ async def process_pdf_extraction(
                     all_records.append(records)
         except json.JSONDecodeError:
             # Recuperação de Emergência (Fallback)
-            # Se o Gemini cuspir um JSON muito grato e truncar pelo limite de 8k tokens,
-            # nós extraímos manualmente todos os objetos json íntegros do meio da string cortada!
-            import re
+            # Se o Gemini cuspir um JSON truncado pelo limite de tokens,
+            # extraímos manualmente todos os objetos JSON íntegros da string cortada.
             valid_objects = re.findall(r'\{[^{}]+\}', clean_r)
             for obj_str in valid_objects:
                 try:
@@ -347,7 +359,12 @@ async def process_pdf_extraction(
     all_records = [r for r in all_records if any(str(v).strip() for v in r.values())]
 
     # 6. Dedup e retorna
-    return consolidar_generico(all_records)
+    failed_chunks = sum(1 for r in results if r is None)
+    if failed_chunks:
+        logger.warning("Extração parcial: %d/%d chunks falharam", failed_chunks, total)
+    deduped = consolidar_generico(all_records)
+    logger.info("Extração finalizada: %d registros extraídos de %d chunks", len(deduped), total)
+    return deduped
 
 
 def consolidar_generico(records: list[dict]) -> list[dict]:

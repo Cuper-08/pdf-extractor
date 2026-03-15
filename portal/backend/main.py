@@ -13,9 +13,15 @@ import os
 import base64
 import json
 import asyncio
+import logging
 import tempfile
 from datetime import datetime
 from typing import Optional
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
 
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
@@ -37,7 +43,6 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 import fitz  # PyMuPDF
 import httpx
-import sentry_sdk
 
 from core.auth import verify_token
 from core.database import (
@@ -69,18 +74,6 @@ _PRICE_TO_PLAN: dict[str, str] = {
 }
 
 # ─────────────────────────────────────────────
-# SENTRY
-# ─────────────────────────────────────────────
-
-SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
-if SENTRY_DSN:
-    sentry_sdk.init(
-        dsn=SENTRY_DSN,
-        traces_sample_rate=1.0,
-        profiles_sample_rate=1.0,
-    )
-
-# ─────────────────────────────────────────────
 # APP
 # ─────────────────────────────────────────────
 
@@ -89,8 +82,6 @@ app = FastAPI(
     version="2.0.0",
     description="API para extração inteligente de dados de PDFs via IA",
 )
-
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "*")
 
 _extra_origins = [o for o in [FRONTEND_URL] if o and o != "*"]
 app.add_middleware(

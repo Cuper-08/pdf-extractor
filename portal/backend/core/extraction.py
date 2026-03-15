@@ -42,10 +42,10 @@ _model_cache: dict[str, str] = {}
 _model_lock = asyncio.Lock()
 
 PREFERRED_MODELS = [
-    "models/gemini-1.5-flash",      # Rápido, confiável — ideal para extração
-    "models/gemini-2.0-flash-001",
-    "models/gemini-flash-latest",
-    "models/gemini-2.5-flash",      # Thinking model — muito lento para extração
+    "models/gemini-1.5-flash",        # Rápido, estável — ideal para extração
+    "models/gemini-2.0-flash",        # Substituto moderno do 1.5-flash
+    "models/gemini-2.0-flash-lite",   # Mais leve, fallback
+    "models/gemini-2.5-flash",        # Thinking model — lento, último recurso
 ]
 
 
@@ -65,14 +65,17 @@ async def _get_gemini_model(api_key: str) -> str:
         if resp.status_code != 200:
             raise Exception(f"Chave Gemini inválida (HTTP {resp.status_code})")
 
-        available = [m["name"] for m in resp.json().get("models", [])]
+        # Modelos descontinuados que a API ainda lista mas rejeitam requests
+        DEPRECATED = {"models/gemini-2.0-flash-001", "models/gemini-pro"}
+        available = [m["name"] for m in resp.json().get("models", [])
+                     if m["name"] not in DEPRECATED]
         model = None
         for pref in PREFERRED_MODELS:
             if pref in available:
                 model = pref
                 break
         if not model:
-            flash = [m for m in available if "flash" in m.lower()]
+            flash = [m for m in available if "flash" in m.lower() and "001" not in m]
             model = flash[0] if flash else available[0]
 
         _model_cache[api_key] = model
@@ -89,9 +92,17 @@ async def _call_gemini(system_prompt: str, user_text: str, api_key: str, respons
     }
     if response_json:
         payload["generationConfig"]["responseMimeType"] = "application/json"
-        
+
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=payload, timeout=60)
+
+    # Se modelo retornou 404 (descontinuado), limpa cache e tenta redescobrir
+    if resp.status_code == 404:
+        _model_cache.pop(api_key, None)
+        model = await _get_gemini_model(api_key)
+        url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={api_key}"
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload, timeout=60)
 
     # Retry logic com backoff em 429
     if resp.status_code == 429:

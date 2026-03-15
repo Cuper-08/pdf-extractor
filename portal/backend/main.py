@@ -11,9 +11,11 @@ Endpoints:
 import os
 import base64
 import json
+from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends, Form
+import stripe
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -27,8 +29,23 @@ from core.database import (
     get_user_usage,
     check_usage_limit,
     increment_usage,
+    upsert_subscription,
+    get_stripe_customer_id,
+    get_user_email,
 )
 from core.extraction import generate_schema, process_pdf_extraction, create_excel
+
+# Stripe setup
+stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+
+# Mapeamento price_id → nome do plano
+_PRICE_TO_PLAN: dict[str, str] = {
+    os.environ.get("STRIPE_PRICE_STARTER", ""): "starter",
+    os.environ.get("STRIPE_PRICE_PRO", ""): "pro",
+    os.environ.get("STRIPE_PRICE_EMPRESA", ""): "empresa",
+}
 
 # ─────────────────────────────────────────────
 # APP
@@ -42,15 +59,15 @@ app = FastAPI(
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "*")
 
+_extra_origins = [o for o in [FRONTEND_URL] if o and o != "*"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:5173",
-        "https://*.lovable.app",
-        "https://*.lovableproject.com",
-        FRONTEND_URL,
+        *_extra_origins,
     ],
+    allow_origin_regex=r"https://(.*\.(lovable\.app|lovableproject\.com)|extrai\.online|www\.extrai\.online)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -97,7 +114,7 @@ def health():
 @app.post("/generate-schema", response_model=GenerateSchemaResponse)
 async def generate_schema_endpoint(
     req: GenerateSchemaRequest,
-    user_id: str = Depends(verify_token),
+    _: str = Depends(verify_token),
 ):
     """
     Recebe descrição em linguagem natural do usuário.
@@ -275,3 +292,155 @@ async def download_job_result(
 async def get_usage(user_id: str = Depends(verify_token)):
     """Retorna uso do usuário no mês corrente + limite do plano."""
     return await get_user_usage(user_id)
+
+
+# ─────────────────────────────────────────────
+# POST /create-checkout-session  (Stripe)
+# ─────────────────────────────────────────────
+
+class CheckoutRequest(BaseModel):
+    price_id: str
+
+
+@app.post("/create-checkout-session")
+async def create_checkout_session(
+    req: CheckoutRequest,
+    user_id: str = Depends(verify_token),
+):
+    """Cria uma Stripe Checkout Session e retorna a URL de pagamento."""
+    if req.price_id not in _PRICE_TO_PLAN:
+        raise HTTPException(400, "Price ID inválido.")
+
+    email = await get_user_email(user_id)
+
+    try:
+        session = await stripe.checkout.Session.create_async(
+            customer_email=email,
+            client_reference_id=user_id,
+            line_items=[{"price": req.price_id, "quantity": 1}],
+            mode="subscription",
+            success_url=f"{FRONTEND_URL}/app?upgraded=true",
+            cancel_url=f"{FRONTEND_URL}/pricing",
+            metadata={"user_id": user_id},
+        )
+    except stripe.StripeError as e:
+        raise HTTPException(500, f"Erro Stripe: {e.user_message}")
+
+    return {"checkout_url": session.url}
+
+
+# ─────────────────────────────────────────────
+# POST /create-portal-session  (Stripe)
+# ─────────────────────────────────────────────
+
+@app.post("/create-portal-session")
+async def create_portal_session(user_id: str = Depends(verify_token)):
+    """Cria sessão no Stripe Customer Portal para gerenciar assinatura."""
+    customer_id = await get_stripe_customer_id(user_id)
+    if not customer_id:
+        raise HTTPException(404, "Nenhuma assinatura ativa encontrada.")
+
+    try:
+        session = await stripe.billing_portal.Session.create_async(
+            customer=customer_id,
+            return_url=f"{FRONTEND_URL}/app/account",
+        )
+    except stripe.StripeError as e:
+        raise HTTPException(500, f"Erro Stripe: {e.user_message}")
+
+    return {"portal_url": session.url}
+
+
+# ─────────────────────────────────────────────
+# POST /webhook/stripe
+# ─────────────────────────────────────────────
+
+@app.post("/webhook/stripe", status_code=200)
+async def stripe_webhook(request: Request):
+    """
+    Recebe eventos do Stripe e atualiza assinaturas no Supabase.
+    Não tem autenticação JWT — usa verificação de assinatura Stripe.
+    """
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except stripe.errors.SignatureVerificationError:
+        raise HTTPException(400, "Assinatura Stripe inválida.")
+    except Exception as e:
+        raise HTTPException(400, f"Webhook inválido: {e}")
+
+    event_type = event["type"]
+    data = event["data"]["object"]
+
+    # ── checkout.session.completed ──────────────
+    if event_type == "checkout.session.completed":
+        user_id = data.get("client_reference_id") or data.get("metadata", {}).get("user_id")
+        subscription_id = data.get("subscription")
+        customer_id = data.get("customer")
+
+        if user_id and subscription_id:
+            # Busca detalhes da subscription para obter o price_id
+            sub = await stripe.Subscription.retrieve_async(subscription_id)
+            price_id = sub["items"]["data"][0]["price"]["id"]
+            plan = _PRICE_TO_PLAN.get(price_id, "starter")
+            period_end = datetime.utcfromtimestamp(
+                sub["current_period_end"]
+            ).isoformat()
+
+            await upsert_subscription(
+                user_id=user_id,
+                stripe_subscription_id=subscription_id,
+                stripe_customer_id=customer_id,
+                plan=plan,
+                status="active",
+                current_period_end=period_end,
+            )
+
+    # ── customer.subscription.updated ───────────
+    elif event_type == "customer.subscription.updated":
+        subscription_id = data["id"]
+        price_id = data["items"]["data"][0]["price"]["id"]
+        plan = _PRICE_TO_PLAN.get(price_id, "starter")
+        status = data["status"]  # active / past_due / canceled
+        period_end = datetime.utcfromtimestamp(
+            data["current_period_end"]
+        ).isoformat()
+
+        # Busca user_id pela subscription existente no Supabase
+        from core.database import _rest
+        rows = await _rest(
+            "GET",
+            f"subscriptions?stripe_subscription_id=eq.{subscription_id}&select=user_id",
+        )
+        if isinstance(rows, list) and rows:
+            user_id = rows[0]["user_id"]
+            await upsert_subscription(
+                user_id=user_id,
+                stripe_subscription_id=subscription_id,
+                stripe_customer_id=data.get("customer", ""),
+                plan=plan,
+                status=status,
+                current_period_end=period_end,
+            )
+
+    # ── customer.subscription.deleted ───────────
+    elif event_type == "customer.subscription.deleted":
+        subscription_id = data["id"]
+        from core.database import _rest
+        rows = await _rest(
+            "GET",
+            f"subscriptions?stripe_subscription_id=eq.{subscription_id}&select=user_id",
+        )
+        if isinstance(rows, list) and rows:
+            user_id = rows[0]["user_id"]
+            await upsert_subscription(
+                user_id=user_id,
+                stripe_subscription_id=subscription_id,
+                stripe_customer_id=data.get("customer", ""),
+                plan="free",
+                status="canceled",
+            )
+
+    return {"received": True}

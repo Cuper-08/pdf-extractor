@@ -6,3 +6,5 @@ build/
 *.xlsx
 config_extrator.json
 chunks_temporarios/
+.env
+portal/backend/.env

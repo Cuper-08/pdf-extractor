@@ -6,8 +6,6 @@ Tabelas esperadas (criadas pelo Antigravity database-architect):
   - subscriptions
 """
 import os
-import json
-import asyncio
 from datetime import datetime
 from typing import Optional
 import httpx
@@ -180,6 +178,76 @@ async def _get_user_plan(user_id: str) -> Optional[str]:
         )
         if isinstance(result, list) and result:
             return result[0].get("plan")
+    except Exception:
+        pass
+    return None
+
+
+# ─────────────────────────────────────────────
+# subscriptions (Stripe)
+# ─────────────────────────────────────────────
+
+async def upsert_subscription(
+    user_id: str,
+    stripe_subscription_id: str,
+    stripe_customer_id: str,
+    plan: str,
+    status: str,
+    current_period_end: Optional[str] = None,
+) -> None:
+    """Cria ou atualiza a assinatura do usuário no Supabase."""
+    data: dict = {
+        "user_id": user_id,
+        "stripe_subscription_id": stripe_subscription_id,
+        "stripe_customer_id": stripe_customer_id,
+        "plan": plan,
+        "status": status,
+    }
+    if current_period_end:
+        data["current_period_end"] = current_period_end
+
+    # Tenta update por stripe_subscription_id; se não existir, insere
+    existing = await _rest(
+        "GET",
+        f"subscriptions?stripe_subscription_id=eq.{stripe_subscription_id}&select=id",
+    )
+    if isinstance(existing, list) and existing:
+        await _rest(
+            "PATCH",
+            f"subscriptions?stripe_subscription_id=eq.{stripe_subscription_id}",
+            json=data,
+        )
+    else:
+        await _rest("POST", "subscriptions", json=data)
+
+
+async def get_stripe_customer_id(user_id: str) -> Optional[str]:
+    try:
+        result = await _rest(
+            "GET",
+            f"subscriptions?user_id=eq.{user_id}&select=stripe_customer_id&limit=1",
+        )
+        if isinstance(result, list) and result:
+            return result[0].get("stripe_customer_id")
+    except Exception:
+        pass
+    return None
+
+
+async def get_user_email(user_id: str) -> Optional[str]:
+    """Busca email do usuário via Supabase Admin API (service role key)."""
+    service_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if not service_key:
+        return None
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}",
+                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+                timeout=10,
+            )
+        if resp.status_code == 200:
+            return resp.json().get("email")
     except Exception:
         pass
     return None

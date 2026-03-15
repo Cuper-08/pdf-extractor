@@ -305,32 +305,28 @@ def parse_generic_table(markdown_text: str) -> list[dict]:
 
 def consolidar_generico(records: list[dict]) -> list[dict]:
     """
-    Dedup por chave composta: primeira_coluna + segunda_coluna (NFC normalizado).
-    Se o registro tiver apenas 1 coluna, usa o valor completo como chave.
-    Portado de extrator_standalone.py:286-313.
+    Dedup por igualdade exata de todos os campos (NFC normalizado).
+    Apenas linhas 100% idênticas são removidas — registros distintos com
+    os mesmos valores em algumas colunas (ex: mesmo autor em obras diferentes)
+    são preservados normalmente.
     """
     if not records:
         return []
 
     keys = list(records[0].keys())
-    key1 = keys[0] if len(keys) >= 1 else None
-    key2 = keys[1] if len(keys) >= 2 else None
+    seen: set[str] = set()
+    result: list[dict] = []
 
-    mapa: dict[str, dict] = {}
     for rec in records:
-        v1 = unicodedata.normalize("NFC", (rec.get(key1) or "").strip().lower())
-        v2 = unicodedata.normalize("NFC", (rec.get(key2) or "").strip().lower()) if key2 else ""
-        chave = f"{v1}|||{v2}"
+        chave = "|||".join(
+            unicodedata.normalize("NFC", str(rec.get(k) or "").strip().lower())
+            for k in keys
+        )
+        if chave not in seen:
+            seen.add(chave)
+            result.append(rec)
 
-        if chave not in mapa:
-            mapa[chave] = rec
-        else:
-            # Preenche células vazias com dados do chunk alternativo
-            for k, v in rec.items():
-                if v and not mapa[chave].get(k):
-                    mapa[chave][k] = v
-
-    return list(mapa.values())
+    return result
 
 
 # ─────────────────────────────────────────────

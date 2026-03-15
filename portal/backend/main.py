@@ -53,7 +53,7 @@ from core.database import (
     get_user_email,
     get_recent_schemas,
 )
-from core.extraction import generate_schema, process_pdf_extraction, create_excel
+from core.extraction import generate_schema, process_pdf_extraction, create_excel, _get_gemini_model, GEMINI_API_KEY
 
 # Stripe setup
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -105,6 +105,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def _startup():
+    """Pré-aquece o cache de modelos do Gemini para eliminar latência na primeira extração."""
+    if GEMINI_API_KEY:
+        try:
+            await _get_gemini_model(GEMINI_API_KEY)
+        except Exception:
+            pass  # falha silenciosa — a extração tentará novamente quando necessário
 
 
 # ─────────────────────────────────────────────

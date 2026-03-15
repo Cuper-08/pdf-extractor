@@ -31,9 +31,27 @@ from openpyxl.styles import Font, PatternFill, Alignment
 # ─────────────────────────────────────────────
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-CHUNK_SIZE = 40_000        # chars por chunk (~10 páginas densas). Impede json enorme com 120k que causaria truncamento
+CHUNK_SIZE = 40_000        # chars por chunk (~10 páginas densas)
 CHUNK_OVERLAP = 2_000      # overlap entre chunks para não perder registros no limite
-MAX_CONCURRENT = 5         # máximo de chunks em paralelo
+MAX_CONCURRENT = 3         # chunks em paralelo — 5 causava burst de 429s no Gemini
+
+# ─────────────────────────────────────────────
+# HTTP CLIENT compartilhado (connection pool)
+# ─────────────────────────────────────────────
+# Criação per-call adicionava 200-500ms de TCP handshake em cada request.
+# Um único cliente com keepalive elimina esse overhead.
+
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            timeout=httpx.Timeout(65.0),
+        )
+    return _http_client
 
 # ─────────────────────────────────────────────
 # GEMINI — model discovery (async, cached)
@@ -56,11 +74,10 @@ async def _get_gemini_model(api_key: str) -> str:
         if api_key in _model_cache:
             return _model_cache[api_key]
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
-                timeout=15,
-            )
+        resp = await _get_http_client().get(
+            f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+            timeout=15,
+        )
         if resp.status_code != 200:
             raise Exception(f"Chave Gemini inválida (HTTP {resp.status_code})")
 
@@ -85,8 +102,9 @@ class GeminiRateLimitError(Exception):
     pass
 
 @retry(
-    wait=wait_exponential(multiplier=1, min=4, max=60),
-    stop=stop_after_attempt(5),
+    # Pior caso: 5+10+20 = 35s por chunk (antes era 4+8+16+32+60 = 120s)
+    wait=wait_exponential(multiplier=2, min=5, max=30),
+    stop=stop_after_attempt(3),
     retry=retry_if_exception_type((GeminiRateLimitError, httpx.ReadTimeout, httpx.ConnectError))
 )
 async def _call_gemini(system_prompt: str, user_text: str, api_key: str, response_json: bool = False) -> str:
@@ -100,18 +118,24 @@ async def _call_gemini(system_prompt: str, user_text: str, api_key: str, respons
     if response_json:
         payload["generationConfig"]["responseMimeType"] = "application/json"
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=payload, timeout=60)
+    client = _get_http_client()
+    resp = await client.post(url, json=payload, timeout=65.0)
 
     # Se modelo retornou 404 (descontinuado), limpa cache e tenta redescobrir
     if resp.status_code == 404:
         _model_cache.pop(api_key, None)
         model = await _get_gemini_model(api_key)
         url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={api_key}"
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(url, json=payload, timeout=60)
+        resp = await client.post(url, json=payload, timeout=65.0)
 
     if resp.status_code == 429 or resp.status_code >= 500:
+        # Respeita Retry-After do Gemini se disponível
+        retry_after = resp.headers.get("retry-after")
+        if retry_after:
+            try:
+                await asyncio.sleep(min(float(retry_after), 30))
+            except (ValueError, TypeError):
+                pass
         raise GeminiRateLimitError(f"Rate limit or server error: {resp.status_code}")
 
     if resp.status_code != 200:
@@ -269,6 +293,7 @@ async def process_pdf_extraction(
         nonlocal completed_count
         result = await _extract_chunk(chunk, schema_prompt, sem)
         completed_count += 1
+        await asyncio.sleep(0.3)  # espaça requests para evitar burst 429
         if on_progress:
             pct = min(99, int(completed_count / total * 100))  # 99% até salvar no DB
             try:

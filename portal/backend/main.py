@@ -355,6 +355,27 @@ async def extract_custom(
     return {"job_id": job_id, "status": "pending", "pages": page_count}
 
 
+async def _safe_set_error(job_id: str, message: str) -> None:
+    """Tenta marcar job como error — com 3 tentativas e fallback mínimo."""
+    for attempt in range(3):
+        try:
+            await update_job_status(job_id, "error", error_message=message[:500])
+            return
+        except Exception as e:
+            logger.error("Falha ao marcar job %s como error (tentativa %d/3): %s",
+                         job_id, attempt + 1, e, extra={"job_id": job_id})
+            if attempt < 2:
+                await asyncio.sleep(2 ** attempt)
+    # Último recurso: PATCH direto mínimo sem fallback
+    try:
+        from core.database import _rest
+        await _rest("PATCH", f"extraction_jobs?id=eq.{job_id}",
+                     json={"status": "error", "error_message": message[:200]})
+    except Exception:
+        logger.critical("IMPOSSÍVEL marcar job %s como error — job ficará preso!", job_id,
+                        extra={"job_id": job_id})
+
+
 async def _run_extraction(
     job_id: str,
     user_id: str,
@@ -365,12 +386,16 @@ async def _run_extraction(
     original_filename: str = "arquivo.pdf",
 ) -> None:
     """Background task: processa extração lendo do disco com timeout, progresso real e notificação, depois deleta arquivo temporário."""
+    import time as _time
+    t0 = _time.monotonic()
 
     async def _on_progress(pct: int) -> None:
         await update_job_progress(job_id, pct)
 
     try:
         await update_job_status(job_id, "processing")
+        logger.info("Extração iniciada: %s (%d páginas)", original_filename, page_count,
+                     extra={"job_id": job_id, "user_id": user_id})
 
         # Timeout de 1 hora para não deixar jobs ultra-pesados morrerem por causa do backoff exponencial
         records = await asyncio.wait_for(
@@ -395,26 +420,45 @@ async def _run_extraction(
         )
         await increment_usage(user_id, page_count)
 
+        elapsed = _time.monotonic() - t0
+        logger.info("Extração concluída: %s → %d registros em %.1fs",
+                     original_filename, records_count, elapsed,
+                     extra={"job_id": job_id, "user_id": user_id, "duration": round(elapsed, 1)})
+
         # Notificação por email (opcional — requer RESEND_API_KEY)
         if RESEND_API_KEY:
-            email = await get_user_email(user_id)
-            if email:
-                await _send_completion_email(
-                    email=email,
-                    filename=original_filename,
-                    records=records_count,
-                    pages=page_count,
-                    job_id=job_id,
-                )
+            try:
+                email = await get_user_email(user_id)
+                if email:
+                    await _send_completion_email(
+                        email=email,
+                        filename=original_filename,
+                        records=records_count,
+                        pages=page_count,
+                        job_id=job_id,
+                    )
+            except Exception:
+                pass  # e-mail é best-effort — não pode afetar o status do job
 
     except asyncio.TimeoutError:
-        await update_job_status(
+        elapsed = _time.monotonic() - t0
+        logger.error("Extração timeout: %s após %.0fs", original_filename, elapsed,
+                      extra={"job_id": job_id, "user_id": user_id})
+        await _safe_set_error(
             job_id,
-            "error",
-            error_message="Tempo limite de 1 hora excedido. Arquivo muito grande ou API sobrecarregada.",
+            "Tempo limite de 1 hora excedido. Arquivo muito grande ou API sobrecarregada.",
         )
     except Exception as e:
-        await update_job_status(job_id, "error", error_message=str(e)[:500])
+        elapsed = _time.monotonic() - t0
+        logger.error("Extração falhou: %s após %.0fs — %s", original_filename, elapsed, e,
+                      exc_info=True, extra={"job_id": job_id, "user_id": user_id})
+        await _safe_set_error(job_id, str(e))
+    except BaseException as e:
+        # Captura KeyboardInterrupt, SystemExit, GeneratorExit, etc.
+        logger.critical("Extração abortada (BaseException): %s — %s", original_filename, e,
+                        extra={"job_id": job_id, "user_id": user_id})
+        await _safe_set_error(job_id, f"Erro interno do servidor: {type(e).__name__}")
+        raise  # re-raise para não engolir sinais do sistema
     finally:
         # Libera slot de rate limit
         async with _jobs_lock:
@@ -499,6 +543,74 @@ async def get_job_status(
         "records_extracted": job.get("records_extracted") or 0,
         "preview_rows": job.get("preview_rows") or [],
     }
+
+
+# ─────────────────────────────────────────────
+# POST /job/{id}/cancel
+# ─────────────────────────────────────────────
+
+@app.post("/job/{job_id}/cancel")
+async def cancel_job(
+    job_id: str,
+    user_id: str = Depends(verify_token),
+):
+    """Cancela um job pendente ou em processamento."""
+    job = await get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job não encontrado.")
+    if job.get("user_id") != user_id:
+        raise HTTPException(403, "Acesso negado.")
+    if job.get("status") in ("done", "completed", "error", "cancelled"):
+        raise HTTPException(400, f"Job já finalizado com status: {job.get('status')}")
+
+    await update_job_status(job_id, "error", error_message="Cancelado pelo usuário.")
+    logger.info("Job %s cancelado pelo usuário %s", job_id, user_id,
+                extra={"job_id": job_id, "user_id": user_id})
+    return {"status": "cancelled", "job_id": job_id}
+
+
+# ─────────────────────────────────────────────
+# Stale job watchdog (roda a cada 5 min no startup)
+# ─────────────────────────────────────────────
+
+_STALE_JOB_THRESHOLD_MINUTES = 120  # 2 horas
+
+async def _stale_job_watchdog():
+    """Marca jobs presos em 'processing' por mais de 2h como error."""
+    from datetime import timedelta
+    from core.database import _rest
+    while True:
+        await asyncio.sleep(300)  # a cada 5 minutos
+        try:
+            cutoff = (datetime.utcnow() - timedelta(minutes=_STALE_JOB_THRESHOLD_MINUTES)).isoformat()
+
+            stale = await _rest(
+                "GET",
+                f"extraction_jobs?status=in.(pending,processing)&updated_at=lt.{cutoff}"
+                f"&select=id,status,updated_at",
+            )
+            if isinstance(stale, list) and stale:
+                for job in stale:
+                    await _rest(
+                        "PATCH",
+                        f"extraction_jobs?id=eq.{job['id']}",
+                        json={
+                            "status": "error",
+                            "error_message": "Job expirado — preso por mais de 2 horas sem conclusão.",
+                            "updated_at": datetime.utcnow().isoformat(),
+                        },
+                    )
+                    logger.warning("Watchdog: job %s marcado como error (preso desde %s)",
+                                   job["id"], job.get("updated_at"),
+                                   extra={"job_id": job["id"]})
+        except Exception as e:
+            logger.error("Watchdog erro: %s", e)
+
+
+@app.on_event("startup")
+async def _start_watchdog():
+    """Inicia o watchdog de jobs presos em background."""
+    asyncio.create_task(_stale_job_watchdog())
 
 
 # ─────────────────────────────────────────────

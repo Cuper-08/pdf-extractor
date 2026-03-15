@@ -88,6 +88,9 @@ async def update_job_status(
     records_extracted: Optional[int] = None,
     preview_rows: Optional[list] = None,
 ) -> None:
+    import logging
+    _log = logging.getLogger("apex.database")
+
     patch: dict = {"status": status, "updated_at": datetime.utcnow().isoformat()}
     if result_data is not None:
         patch["result_data"] = result_data
@@ -104,13 +107,34 @@ async def update_job_status(
     elif status == "processing":
         patch["progress_pct"] = 0
 
+    last_err: Exception | None = None
+
+    # Tenta 3x com backoff — garante que falhas transientes não prendam o job
+    for attempt in range(3):
+        try:
+            await _rest("PATCH", f"extraction_jobs?id=eq.{job_id}", json=patch)
+            _log.info("Job %s → %s (attempt %d)", job_id, status, attempt + 1)
+            return
+        except Exception as e:
+            last_err = e
+            _log.warning("update_job_status falhou (attempt %d/3): %s", attempt + 1, e)
+            if attempt < 2:
+                import asyncio
+                await asyncio.sleep(2 ** attempt)
+
+    # Fallback: tenta sem campos opcionais (result_data pode ser muito grande)
+    fallback = {k: v for k, v in patch.items()
+                if k not in ("result_data", "records_extracted", "preview_rows", "progress_pct")}
     try:
-        await _rest("PATCH", f"extraction_jobs?id=eq.{job_id}", json=patch)
-    except Exception:
-        # Fallback: try without new columns in case migration hasn't run yet
-        fallback = {k: v for k, v in patch.items()
-                    if k not in ("records_extracted", "preview_rows", "progress_pct")}
         await _rest("PATCH", f"extraction_jobs?id=eq.{job_id}", json=fallback)
+        _log.warning("Job %s → %s via fallback (sem result_data)", job_id, status)
+        return
+    except Exception as e:
+        _log.error("Fallback update_job_status também falhou: %s", e)
+
+    # Se chegou aqui, raise a última exceção para que _safe_set_error trate
+    if last_err:
+        raise last_err
 
 
 async def update_job_progress(job_id: str, progress_pct: int) -> None:

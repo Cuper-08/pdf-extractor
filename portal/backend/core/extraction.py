@@ -34,10 +34,10 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-CHUNK_SIZE = 40_000        # chars por chunk (~10 páginas densas)
-CHUNK_OVERLAP = 2_000      # overlap entre chunks para não perder registros no limite
-MAX_CONCURRENT = 2         # 2 paralelos + spacing garante ≤13 RPM no free tier Gemini
-REQUEST_SPACING = 4.0      # segundos de delay dentro do semáforo entre requests
+CHUNK_SIZE = 25_000        # chars por chunk (~6-8 páginas) — menor = respostas mais confiáveis
+CHUNK_OVERLAP = 3_000      # overlap maior garante que registros no limite entre chunks sejam capturados
+MAX_CONCURRENT = 3         # 3 paralelos + spacing garante ≤15 RPM no Gemini (free tier = 15 RPM)
+REQUEST_SPACING = 3.0      # segundos de delay entre requests — 3 workers × ~12s/cycle = ~15 RPM
 
 # ─────────────────────────────────────────────
 # HTTP CLIENT compartilhado (connection pool)
@@ -105,8 +105,8 @@ class GeminiRateLimitError(Exception):
     pass
 
 @retry(
-    wait=wait_exponential(multiplier=3, min=8, max=45),
-    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=3, min=8, max=60),
+    stop=stop_after_attempt(5),
     retry=retry_if_exception_type((GeminiRateLimitError, httpx.ReadTimeout, httpx.ConnectError))
 )
 async def _call_gemini(system_prompt: str, user_text: str, api_key: str, response_json: bool = False) -> str:
@@ -115,20 +115,23 @@ async def _call_gemini(system_prompt: str, user_text: str, api_key: str, respons
     payload = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"parts": [{"text": user_text}]}],
-        "generationConfig": {"temperature": 0.0},
+        "generationConfig": {
+            "temperature": 0.0,
+            "maxOutputTokens": 8192,  # Garante espaço para respostas longas
+        },
     }
     if response_json:
         payload["generationConfig"]["responseMimeType"] = "application/json"
 
     client = _get_http_client()
-    resp = await client.post(url, json=payload, timeout=120.0)
+    resp = await client.post(url, json=payload, timeout=90.0)
 
     # Se modelo retornou 404 (descontinuado), limpa cache e tenta redescobrir
     if resp.status_code == 404:
         _model_cache.pop(api_key, None)
         model = await _get_gemini_model(api_key)
         url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={api_key}"
-        resp = await client.post(url, json=payload, timeout=120.0)
+        resp = await client.post(url, json=payload, timeout=90.0)
 
     if resp.status_code == 429 or resp.status_code >= 500:
         # NÃO dormir aqui — tenacity já cuida do backoff exponencial.
@@ -294,16 +297,20 @@ async def process_pdf_extraction(
 
     # 3. Processa em paralelo com semáforo de rate limit + rastreio de progresso
     sem = asyncio.Semaphore(MAX_CONCURRENT)
+    import time as _time
 
     async def _extract_with_progress(chunk: str, index: int) -> str | None:
         """Processa um chunk e reporta progresso SEMPRE (sucesso ou falha)."""
         nonlocal completed_count
         result = None
+        t_start = _time.monotonic()
         try:
             result = await _extract_chunk(chunk, schema_prompt, sem)
-            logger.info("Chunk %d/%d concluído (%d chars)", index + 1, total, len(chunk))
+            elapsed = _time.monotonic() - t_start
+            logger.info("Chunk %d/%d concluído (%d chars, %.1fs)", index + 1, total, len(chunk), elapsed)
         except Exception as e:
-            logger.warning("Chunk %d/%d falhou: %s", index + 1, total, e)
+            elapsed = _time.monotonic() - t_start
+            logger.warning("Chunk %d/%d falhou após %.1fs: %s", index + 1, total, elapsed, e)
         # SEMPRE incrementa e reporta progresso — mesmo para chunks que falharam.
         # Isso evita que a barra de progresso trave quando chunks falham.
         completed_count += 1
@@ -363,7 +370,8 @@ async def process_pdf_extraction(
     if failed_chunks:
         logger.warning("Extração parcial: %d/%d chunks falharam", failed_chunks, total)
     deduped = consolidar_generico(all_records)
-    logger.info("Extração finalizada: %d registros extraídos de %d chunks", len(deduped), total)
+    logger.info("Extração finalizada: %d registros (%d brutos, %d dedup removidos) de %d chunks (%d falharam)",
+                len(deduped), len(all_records), len(all_records) - len(deduped), total, failed_chunks)
     return deduped
 
 

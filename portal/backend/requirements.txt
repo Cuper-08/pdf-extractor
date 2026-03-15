@@ -9,3 +9,4 @@ pydantic==2.9.2
 stripe==11.4.0
 sentry-sdk[fastapi]==2.19.2
 tenacity==8.2.3
+cachetools==5.5.0

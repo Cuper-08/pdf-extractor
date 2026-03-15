@@ -15,13 +15,31 @@ import json
 import asyncio
 import logging
 import tempfile
+from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-)
+# ── Structured JSON logging ──────────────────────
+class _JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0]:
+            entry["exception"] = self.formatException(record.exc_info)
+        # Extra fields (user_id, job_id, etc.)
+        for key in ("user_id", "job_id", "duration"):
+            val = getattr(record, key, None)
+            if val is not None:
+                entry[key] = val
+        return json.dumps(entry, ensure_ascii=False)
+
+_handler = logging.StreamHandler()
+_handler.setFormatter(_JsonFormatter())
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
@@ -39,7 +57,7 @@ if _sentry_dsn:
 import stripe
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends, Form, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 import fitz  # PyMuPDF
 import httpx
@@ -59,6 +77,18 @@ from core.database import (
     get_recent_schemas,
 )
 from core.extraction import generate_schema, process_pdf_extraction, create_excel, _get_gemini_model, GEMINI_API_KEY
+
+logger = logging.getLogger("apex")
+
+# ── Rate limiting: máx 3 jobs simultâneos por user ──
+MAX_CONCURRENT_JOBS_PER_USER = 3
+_active_jobs: dict[str, int] = defaultdict(int)
+_jobs_lock = asyncio.Lock()
+
+# ── Upload limits ────────────────────────────────
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB
+MAX_SCHEMA_PROMPT_LEN = 5000
+MAX_COLUMNS = 50
 
 # Stripe setup
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -141,7 +171,39 @@ class JobStatusResponse(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "apex-portal-backend", "version": "2.0.0"}
+    return {"status": "ok", "service": "apex-portal-backend", "version": "2.1.0"}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Health check profundo — verifica conectividade com dependências."""
+    checks: dict[str, str] = {}
+
+    # Supabase REST
+    try:
+        from core.database import _rest
+        await _rest("GET", "extraction_jobs?select=id&limit=0")
+        checks["supabase"] = "ok"
+    except Exception as e:
+        checks["supabase"] = f"error: {e}"
+
+    # Gemini model cache
+    try:
+        if GEMINI_API_KEY:
+            await _get_gemini_model(GEMINI_API_KEY)
+            checks["gemini"] = "ok"
+        else:
+            checks["gemini"] = "no_api_key"
+    except Exception as e:
+        checks["gemini"] = f"error: {e}"
+
+    all_ok = all(v == "ok" for v in checks.values())
+    status_code = 200 if all_ok else 503
+
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "ready" if all_ok else "degraded", "checks": checks},
+    )
 
 
 # ─────────────────────────────────────────────
@@ -184,23 +246,42 @@ async def extract_custom(
     Recebe PDF + schema_prompt (obtido via /generate-schema).
     Processa em background. Retorna job_id para polling via /job/{id}.
     """
+    # ── Validações de input ──────────────────────
+    if len(schema_prompt) > MAX_SCHEMA_PROMPT_LEN:
+        raise HTTPException(400, f"Schema prompt excede limite de {MAX_SCHEMA_PROMPT_LEN} caracteres.")
+
     try:
         column_list: list[str] = json.loads(columns)
     except Exception:
         column_list = []
 
+    if len(column_list) > MAX_COLUMNS:
+        raise HTTPException(400, f"Máximo de {MAX_COLUMNS} colunas permitido.")
+
+    # ── Rate limit: máx N jobs simultâneos por user ──
+    async with _jobs_lock:
+        if _active_jobs[user_id] >= MAX_CONCURRENT_JOBS_PER_USER:
+            raise HTTPException(
+                429,
+                f"Limite de {MAX_CONCURRENT_JOBS_PER_USER} extrações simultâneas atingido. "
+                "Aguarde a conclusão de um job antes de iniciar outro.",
+            )
+        _active_jobs[user_id] += 1
+
     # Salva o arquivo em disco temporário para evitar sobrecarga de RAM
     fd, temp_path = tempfile.mkstemp(suffix=".pdf")
     os.close(fd)
-    
+
     try:
         with open(temp_path, "wb") as f:
             while chunk := await file.read(1024 * 1024):  # Lê em chunks de 1MB
                 f.write(chunk)
-                
+
         file_size = os.path.getsize(temp_path)
         if file_size < 100:
             raise HTTPException(400, "Arquivo PDF inválido ou vazio.")
+        if file_size > MAX_UPLOAD_BYTES:
+            raise HTTPException(400, f"Arquivo excede o limite de {MAX_UPLOAD_BYTES // (1024*1024)}MB.")
 
         # Conta páginas e amostra texto para detectar PDFs de imagem fora da thread principal
         def _inspect_pdf():
@@ -222,10 +303,14 @@ async def extract_custom(
     except HTTPException:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+        async with _jobs_lock:
+            _active_jobs[user_id] = max(0, _active_jobs[user_id] - 1)
         raise
     except Exception as e:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+        async with _jobs_lock:
+            _active_jobs[user_id] = max(0, _active_jobs[user_id] - 1)
         raise HTTPException(400, f"Não foi possível processar o PDF: {e}")
 
     # Verifica limite de uso do plano
@@ -233,6 +318,8 @@ async def extract_custom(
     if not allowed:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+        async with _jobs_lock:
+            _active_jobs[user_id] = max(0, _active_jobs[user_id] - 1)
         raise HTTPException(402, reason)
 
     # Cria job no Supabase
@@ -247,6 +334,8 @@ async def extract_custom(
     except Exception as e:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+        async with _jobs_lock:
+            _active_jobs[user_id] = max(0, _active_jobs[user_id] - 1)
         raise HTTPException(500, f"Erro ao criar job: {e}")
 
     job_id = job["id"]
@@ -327,6 +416,9 @@ async def _run_extraction(
     except Exception as e:
         await update_job_status(job_id, "error", error_message=str(e)[:500])
     finally:
+        # Libera slot de rate limit
+        async with _jobs_lock:
+            _active_jobs[user_id] = max(0, _active_jobs[user_id] - 1)
         # Garante a deleção do arquivo localmente
         if os.path.exists(pdf_path):
             try:

@@ -30,9 +30,9 @@ from openpyxl.styles import Font, PatternFill, Alignment
 # ─────────────────────────────────────────────
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-CHUNK_SIZE = 40_000        # chars por chunk (~10 páginas densas)
-CHUNK_OVERLAP = 2_000      # overlap entre chunks para não perder registros no limite
-MAX_CONCURRENT = 3         # máximo de chunks em paralelo (evita rate limit)
+CHUNK_SIZE = 120_000       # chars por chunk (~30-40 páginas). O Gemini 1.5 aguenta 1M tokens.
+CHUNK_OVERLAP = 3_000      # overlap entre chunks para não perder registros no limite
+MAX_CONCURRENT = 5         # máximo de chunks em paralelo
 
 # ─────────────────────────────────────────────
 # GEMINI — model discovery (async, cached)

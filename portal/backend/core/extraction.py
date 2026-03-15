@@ -232,7 +232,7 @@ async def _extract_chunk(chunk: str, schema_prompt: str, sem: asyncio.Semaphore)
 
 
 async def process_pdf_extraction(
-    pdf_bytes: bytes,
+    pdf_bytes: bytes | str,
     schema_prompt: str,
     on_progress: Optional[Callable[[int], Awaitable[None]]] = None,
 ) -> list[dict]:
@@ -240,10 +240,14 @@ async def process_pdf_extraction(
     Layer 2: extrai texto do PDF → divide em chunks → processa com Gemini
     em paralelo → faz parse → dedup → retorna list[dict].
 
+    pdf_bytes: bytes do PDF ou caminho de arquivo (str).
     on_progress: corrotina opcional chamada após cada chunk (recebe % 0-100).
     """
-    # 1. Extrai texto do PDF
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    # 1. Extrai texto do PDF — aceita bytes ou caminho de arquivo
+    if isinstance(pdf_bytes, str):
+        doc = fitz.open(pdf_bytes)
+    else:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     full_text = "\n".join(page.get_text() for page in doc)
     doc.close()
 

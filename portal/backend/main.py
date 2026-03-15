@@ -13,8 +13,22 @@ import os
 import base64
 import json
 import asyncio
+import tempfile
 from datetime import datetime
 from typing import Optional
+
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
+
+_sentry_dsn = os.environ.get("SENTRY_DSN", "")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        integrations=[StarletteIntegration(), FastApiIntegration()],
+        traces_sample_rate=0.1,
+        send_default_pii=False,
+    )
 
 import stripe
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends, Form, Request, Query
@@ -23,6 +37,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 import fitz  # PyMuPDF
 import httpx
+import sentry_sdk
 
 from core.auth import verify_token
 from core.database import (
@@ -52,6 +67,18 @@ _PRICE_TO_PLAN: dict[str, str] = {
     os.environ.get("STRIPE_PRICE_PRO", ""): "pro",
     os.environ.get("STRIPE_PRICE_EMPRESA", ""): "empresa",
 }
+
+# ─────────────────────────────────────────────
+# SENTRY
+# ─────────────────────────────────────────────
+
+SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        traces_sample_rate=1.0,
+        profiles_sample_rate=1.0,
+    )
 
 # ─────────────────────────────────────────────
 # APP
@@ -161,18 +188,28 @@ async def extract_custom(
     except Exception:
         column_list = []
 
-    pdf_bytes = await file.read()
-    if len(pdf_bytes) < 100:
-        raise HTTPException(400, "Arquivo PDF inválido ou vazio.")
-
-    # Conta páginas e amostra texto para detectar PDFs de imagem
+    # Salva o arquivo em disco temporário para evitar sobrecarga de RAM
+    fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+    os.close(fd)
+    
     try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        page_count = len(doc)
+        with open(temp_path, "wb") as f:
+            while chunk := await file.read(1024 * 1024):  # Lê em chunks de 1MB
+                f.write(chunk)
+                
+        file_size = os.path.getsize(temp_path)
+        if file_size < 100:
+            raise HTTPException(400, "Arquivo PDF inválido ou vazio.")
 
-        # Detecta PDF sem texto (scan/imagem) — amostra as 3 primeiras páginas
-        sample_text = "".join(doc[i].get_text() for i in range(min(3, page_count)))
-        doc.close()
+        # Conta páginas e amostra texto para detectar PDFs de imagem fora da thread principal
+        def _inspect_pdf():
+            doc = fitz.open(temp_path)
+            p_count = len(doc)
+            s_text = "".join(doc[i].get_text() for i in range(min(3, p_count)))
+            doc.close()
+            return p_count, s_text
+
+        page_count, sample_text = await asyncio.to_thread(_inspect_pdf)
 
         if not sample_text.strip():
             raise HTTPException(
@@ -182,13 +219,19 @@ async def extract_custom(
                 "Use um leitor de PDF para verificar se o texto é selecionável.",
             )
     except HTTPException:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
         raise
     except Exception as e:
-        raise HTTPException(400, f"Não foi possível abrir o PDF: {e}")
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise HTTPException(400, f"Não foi possível processar o PDF: {e}")
 
     # Verifica limite de uso do plano
     allowed, reason = await check_usage_limit(user_id, page_count)
     if not allowed:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
         raise HTTPException(402, reason)
 
     # Cria job no Supabase
@@ -201,6 +244,8 @@ async def extract_custom(
             page_count=page_count,
         )
     except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
         raise HTTPException(500, f"Erro ao criar job: {e}")
 
     job_id = job["id"]
@@ -210,7 +255,7 @@ async def extract_custom(
         _run_extraction,
         job_id=job_id,
         user_id=user_id,
-        pdf_bytes=pdf_bytes,
+        pdf_path=temp_path,
         schema_prompt=schema_prompt,
         column_list=column_list,
         page_count=page_count,
@@ -223,13 +268,13 @@ async def extract_custom(
 async def _run_extraction(
     job_id: str,
     user_id: str,
-    pdf_bytes: bytes,
+    pdf_path: str,
     schema_prompt: str,
     column_list: list[str],
     page_count: int,
     original_filename: str = "arquivo.pdf",
 ) -> None:
-    """Background task: processa extração com timeout, progresso real e notificação."""
+    """Background task: processa extração lendo do disco com timeout, progresso real e notificação, depois deleta arquivo temporário."""
 
     async def _on_progress(pct: int) -> None:
         await update_job_progress(job_id, pct)
@@ -239,7 +284,7 @@ async def _run_extraction(
 
         # Timeout de 5 minutos para não deixar jobs pendentes para sempre
         records = await asyncio.wait_for(
-            process_pdf_extraction(pdf_bytes, schema_prompt, on_progress=_on_progress),
+            process_pdf_extraction(pdf_path, schema_prompt, on_progress=_on_progress),
             timeout=300,
         )
 
@@ -280,6 +325,13 @@ async def _run_extraction(
         )
     except Exception as e:
         await update_job_status(job_id, "error", error_message=str(e)[:500])
+    finally:
+        # Garante a deleção do arquivo localmente
+        if os.path.exists(pdf_path):
+            try:
+                os.remove(pdf_path)
+            except Exception:
+                pass
 
 
 async def _send_completion_email(

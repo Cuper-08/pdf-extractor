@@ -282,10 +282,10 @@ async def _run_extraction(
     try:
         await update_job_status(job_id, "processing")
 
-        # Timeout de 15 minutos para não deixar jobs pendentes para sempre
+        # Timeout de 1 hora para não deixar jobs ultra-pesados morrerem por causa do backoff exponencial
         records = await asyncio.wait_for(
             process_pdf_extraction(pdf_path, schema_prompt, on_progress=_on_progress),
-            timeout=900,
+            timeout=3600,
         )
 
         excel_bytes = create_excel(records, column_list)
@@ -321,7 +321,7 @@ async def _run_extraction(
         await update_job_status(
             job_id,
             "error",
-            error_message="Tempo limite de 15 minutos excedido. Tente com um PDF menor ou aguarde e tente novamente.",
+            error_message="Tempo limite de 1 hora excedido. Arquivo muito grande ou API sobrecarregada.",
         )
     except Exception as e:
         await update_job_status(job_id, "error", error_message=str(e)[:500])

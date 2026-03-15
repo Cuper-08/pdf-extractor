@@ -23,6 +23,7 @@ from typing import Optional, Callable, Awaitable
 import fitz  # PyMuPDF
 import httpx
 import pandas as pd
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from openpyxl.styles import Font, PatternFill, Alignment
 
 # ─────────────────────────────────────────────
@@ -30,8 +31,8 @@ from openpyxl.styles import Font, PatternFill, Alignment
 # ─────────────────────────────────────────────
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-CHUNK_SIZE = 120_000       # chars por chunk (~30-40 páginas). O Gemini 1.5 aguenta 1M tokens.
-CHUNK_OVERLAP = 3_000      # overlap entre chunks para não perder registros no limite
+CHUNK_SIZE = 40_000        # chars por chunk (~10 páginas densas). Impede json enorme com 120k que causaria truncamento
+CHUNK_OVERLAP = 2_000      # overlap entre chunks para não perder registros no limite
 MAX_CONCURRENT = 5         # máximo de chunks em paralelo
 
 # ─────────────────────────────────────────────
@@ -80,6 +81,14 @@ async def _get_gemini_model(api_key: str) -> str:
         return model
 
 
+class GeminiRateLimitError(Exception):
+    pass
+
+@retry(
+    wait=wait_exponential(multiplier=1, min=4, max=60),
+    stop=stop_after_attempt(5),
+    retry=retry_if_exception_type((GeminiRateLimitError, httpx.ReadTimeout, httpx.ConnectError))
+)
 async def _call_gemini(system_prompt: str, user_text: str, api_key: str, response_json: bool = False) -> str:
     model = await _get_gemini_model(api_key)
     url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={api_key}"
@@ -102,14 +111,8 @@ async def _call_gemini(system_prompt: str, user_text: str, api_key: str, respons
         async with httpx.AsyncClient() as client:
             resp = await client.post(url, json=payload, timeout=60)
 
-    # Retry logic com backoff em 429
-    if resp.status_code == 429:
-        for wait in (15, 30):
-            await asyncio.sleep(wait)
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(url, json=payload, timeout=60)
-            if resp.status_code != 429:
-                break
+    if resp.status_code == 429 or resp.status_code >= 500:
+        raise GeminiRateLimitError(f"Rate limit or server error: {resp.status_code}")
 
     if resp.status_code != 200:
         raise Exception(f"Gemini error {resp.status_code}: {resp.text[:500]}")
@@ -302,7 +305,18 @@ async def process_pdf_extraction(
                 else:
                     all_records.append(records)
         except json.JSONDecodeError:
-            pass  # Ignora chunk com falha no JSON silenciosamente
+            # Recuperação de Emergência (Fallback)
+            # Se o Gemini cuspir um JSON muito grato e truncar pelo limite de 8k tokens,
+            # nós extraímos manualmente todos os objetos json íntegros do meio da string cortada!
+            import re
+            valid_objects = re.findall(r'\{[^{}]+\}', clean_r)
+            for obj_str in valid_objects:
+                try:
+                    obj = json.loads(obj_str)
+                    if isinstance(obj, dict) and len(obj) > 0:
+                        all_records.append(obj)
+                except json.JSONDecodeError:
+                    pass
 
     # 5. Remove linhas completamente vazias
     all_records = [r for r in all_records if any(str(v).strip() for v in r.values())]

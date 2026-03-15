@@ -33,7 +33,7 @@ PLAN_LIMITS: dict[str | None, int] = {
 
 
 def _current_month() -> str:
-    return datetime.now().strftime("%Y-%m")
+    return datetime.utcnow().strftime("%Y-%m")
 
 
 async def _rest(method: str, path: str, **kwargs) -> list | dict:

@@ -7,10 +7,10 @@ Layer 1 — generate_schema():
 
 Layer 2 — process_pdf_extraction():
   PDF → PyMuPDF → chunks (smart_split) → Gemini processa em paralelo
-  → parse tabela Markdown → dedup → retorna list[dict]
+  → retorna JSON → dedup → retorna list[dict]
 
-Funções utilitárias (portadas de extrator_standalone.py):
-  smart_split, parse_generic_table, consolidar_generico, create_excel
+Funções utilitárias:
+  smart_split, consolidar_generico, create_excel
 """
 import os
 import re
@@ -42,10 +42,10 @@ _model_cache: dict[str, str] = {}
 _model_lock = asyncio.Lock()
 
 PREFERRED_MODELS = [
-    "models/gemini-2.5-flash",
+    "models/gemini-1.5-flash",      # Rápido, confiável — ideal para extração
     "models/gemini-2.0-flash-001",
     "models/gemini-flash-latest",
-    "models/gemini-1.5-flash",
+    "models/gemini-2.5-flash",      # Thinking model — muito lento para extração
 ]
 
 
@@ -79,7 +79,7 @@ async def _get_gemini_model(api_key: str) -> str:
         return model
 
 
-async def _call_gemini(system_prompt: str, user_text: str, api_key: str) -> str:
+async def _call_gemini(system_prompt: str, user_text: str, api_key: str, response_json: bool = False) -> str:
     model = await _get_gemini_model(api_key)
     url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={api_key}"
     payload = {
@@ -87,13 +87,20 @@ async def _call_gemini(system_prompt: str, user_text: str, api_key: str) -> str:
         "contents": [{"parts": [{"text": user_text}]}],
         "generationConfig": {"temperature": 0.0},
     }
+    if response_json:
+        payload["generationConfig"]["responseMimeType"] = "application/json"
+        
     async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=payload, timeout=120)
+        resp = await client.post(url, json=payload, timeout=60)
 
+    # Retry logic com backoff em 429
     if resp.status_code == 429:
-        await asyncio.sleep(30)
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(url, json=payload, timeout=120)
+        for wait in (15, 30):
+            await asyncio.sleep(wait)
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(url, json=payload, timeout=60)
+            if resp.status_code != 429:
+                break
 
     if resp.status_code != 200:
         raise Exception(f"Gemini error {resp.status_code}: {resp.text[:500]}")
@@ -110,33 +117,32 @@ async def _call_gemini(system_prompt: str, user_text: str, api_key: str) -> str:
 # ─────────────────────────────────────────────
 
 META_SYSTEM = """Você é um especialista em extração de dados estruturados de documentos PDF.
-Sua resposta deve ser SOMENTE um JSON válido (sem markdown, sem código, sem explicação).
+Sua resposta deve ser OBRIGATORIAMENTE um JSON válido estruturado de acordo com as instruções.
 """
 
 META_USER_TEMPLATE = """O usuário quer extrair as seguintes informações de seus documentos PDF:
 
 {user_request}
 
-Crie um system prompt preciso para que uma IA extraia esses dados com máxima precisão.
+Crie um system prompt preciso para que uma IA extraia esses dados documentais com máxima precisão.
 
-Retorne EXATAMENTE este JSON (sem markdown, sem texto adicional):
+Retorne EXATAMENTE este objeto JSON de raiz (não use markdown code blocks se o mime-type já for JSON):
 {{
   "system_prompt": "...",
   "columns": ["coluna1", "coluna2", ...]
 }}
 
 O system_prompt OBRIGATORIAMENTE deve:
-1. Definir exatamente quais campos extrair — serão as colunas da tabela Markdown
-2. Exigir que a saída seja EXCLUSIVAMENTE uma tabela Markdown com separador (linha |---|---|) e essas colunas exatas
-3. Instruir: NÃO adicionar nenhum texto antes nem depois da tabela — apenas a tabela Markdown
-4. Instruir a deixar células VAZIAS quando o dado não existir (NUNCA inventar dados)
-5. Definir UMA LINHA por registro/item encontrado
-6. Instruir a extrair TODOS os registros encontrados no texto, sem pular nenhum
-7. Instruir a repetir campos-chave em cada linha (ex: título do trabalho deve repetir em cada linha de coautor)
-8. Instruir a ignorar cabeçalhos, rodapés e numeração de página
-9. Ser escrito em português
+1. Definir exatamente quais campos extrair.
+2. Exigir que a saída seja EXCLUSIVAMENTE um array de objetos JSON `[{{ "coluna1": "valor" }}]`, onde as chaves sejam EXATAMENTE as colunas definidas.
+3. Instruir a deixar valores VAZIOS (string vazia ou null) quando o dado não existir (NUNCA inventar dados).
+4. Definir UMA LINHA/OBJETO por registro/item distinto encontrado no documento.
+5. Instruir a extrair TODOS os registros encontrados no texto lido, sem pular nenhum.
+6. Instruir a repetir campos-chave de contexto em cada objeto filho (ex: o "nome do processo" ou "título do documento" deve ser repetido em cada registro associado).
+7. Instruir a ignorar inteiramente cabeçalhos de página, currículos irrelevantes e numeração de página.
+8. Ser escrito em português claro e direto.
 
-O campo "columns" deve listar as colunas exatas que aparecerão na tabela."""
+O campo "columns" abaixo deve listar as colunas exatas que serão usadas como chaves nos objetos JSON extraídos."""
 
 
 async def generate_schema(user_description: str) -> dict:
@@ -149,9 +155,9 @@ async def generate_schema(user_description: str) -> dict:
         raise Exception("GEMINI_API_KEY não configurada no servidor.")
 
     user_text = META_USER_TEMPLATE.format(user_request=user_description.strip())
-    raw = await _call_gemini(META_SYSTEM, user_text, api_key)
+    raw = await _call_gemini(META_SYSTEM, user_text, api_key, response_json=True)
 
-    # Parse JSON — com fallback por regex se a IA adicionar markdown
+    # Parse JSON
     try:
         parsed = json.loads(raw.strip())
     except json.JSONDecodeError:
@@ -212,6 +218,7 @@ async def _extract_chunk(chunk: str, schema_prompt: str, sem: asyncio.Semaphore)
             schema_prompt,
             f"Extraia os dados deste texto:\n\n{chunk}",
             GEMINI_API_KEY,
+            response_json=True,
         )
 
 
@@ -262,95 +269,33 @@ async def process_pdf_extraction(
     for r in results:
         if isinstance(r, Exception):
             continue  # chunk falhou — best effort
-        records = parse_generic_table(r)
-        all_records.extend(records)
+            
+        try:
+            # remove markers markdown code se retornados erradamente
+            clean_r = r.strip()
+            if clean_r.startswith("```json"):
+                clean_r = clean_r[7:]
+            if clean_r.endswith("```"):
+                clean_r = clean_r[:-3]
+                
+            records = json.loads(clean_r.strip())
+            
+            if isinstance(records, list):
+                all_records.extend(records)
+            elif isinstance(records, dict):
+                # Caso a IA retorne algo tipo {"data": [...]} ou só um registro
+                if len(records.values()) == 1 and isinstance(list(records.values())[0], list):
+                    all_records.extend(list(records.values())[0])
+                else:
+                    all_records.append(records)
+        except json.JSONDecodeError:
+            pass  # Ignora chunk com falha no JSON silenciosamente
 
-    # 5. Remove linhas completamente vazias (ruído da IA)
+    # 5. Remove linhas completamente vazias
     all_records = [r for r in all_records if any(str(v).strip() for v in r.values())]
 
     # 6. Dedup e retorna
     return consolidar_generico(all_records)
-
-
-# ─────────────────────────────────────────────
-# PARSER — tabela Markdown genérica
-# ─────────────────────────────────────────────
-
-_SEPARATOR_RE = re.compile(r"^\s*\|[\s|:-]+\|\s*$")
-
-# Keywords amplamente expandidas para fallback quando não há separador
-_HEADER_KEYWORDS = {
-    "título", "titulo", "trabalho", "autor", "email", "e-mail", "nome",
-    "cnpj", "valor", "data", "número", "numero", "tipo", "parte",
-    "endereço", "endereco", "telefone", "cpf", "processo", "contrato",
-    "área", "area", "disciplina", "matéria", "materia", "tópico", "topico",
-    "descrição", "descricao", "objeto", "item", "produto", "serviço", "servico",
-    "quantidade", "qtd", "preço", "preco", "total", "empresa", "razão", "razao",
-    "social", "cargo", "função", "funcao", "cidade", "estado", "cep", "rua",
-    "documento", "registro", "código", "codigo", "classe", "categoria",
-    "responsável", "responsavel", "período", "periodo", "prazo", "vigência",
-    "vigencia", "resultado", "status", "situação", "situacao",
-}
-
-
-def parse_generic_table(markdown_text: str) -> list[dict]:
-    """
-    Converte tabela Markdown de qualquer estrutura em list[dict].
-
-    Estratégia de detecção de cabeçalho (em ordem de confiança):
-    1. Se existe linha separadora (|---|---|) após a primeira linha → primeira linha é cabeçalho (certeza)
-    2. Se alguma célula da primeira linha contém keyword de cabeçalho → cabeçalho (heurística)
-    3. Caso contrário → "Coluna 1, Coluna 2, ..." (fallback)
-    """
-    all_table_lines = [l for l in markdown_text.split("\n") if l.strip() and "|" in l]
-    if not all_table_lines:
-        return []
-
-    # Verifica se existe separador logo após a primeira linha (linhas 1 ou 2)
-    has_separator = any(_SEPARATOR_RE.match(l) for l in all_table_lines[1:3])
-
-    # Remove linhas separadoras para processamento
-    lines = [l for l in all_table_lines if not _SEPARATOR_RE.match(l)]
-    if not lines:
-        return []
-
-    def split_row(line: str) -> list[str]:
-        parts = line.split("|")
-        if parts and not parts[0].strip():
-            parts = parts[1:]
-        if parts and not parts[-1].strip():
-            parts = parts[:-1]
-        return [p.strip() for p in parts]
-
-    header_candidates = split_row(lines[0])
-
-    # Tem separador → primeira linha é definitivamente cabeçalho
-    # Sem separador → usa keywords como fallback
-    is_header = has_separator or any(
-        any(kw in col.lower() for kw in _HEADER_KEYWORDS)
-        for col in header_candidates
-    )
-
-    if is_header:
-        headers = header_candidates
-        data_lines = lines[1:]
-    else:
-        headers = [f"Coluna {i+1}" for i in range(len(header_candidates))]
-        data_lines = lines
-
-    records = []
-    for line in data_lines:
-        cols = split_row(line)
-        if not cols:
-            continue
-        if len(cols) >= len(headers):
-            record = {headers[i]: cols[i] for i in range(len(headers))}
-        else:
-            # Linha incompleta — preenche com vazio
-            record = {headers[i]: (cols[i] if i < len(cols) else "") for i in range(len(headers))}
-        records.append(record)
-
-    return records
 
 
 def consolidar_generico(records: list[dict]) -> list[dict]:

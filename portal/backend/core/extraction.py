@@ -43,9 +43,7 @@ _model_lock = asyncio.Lock()
 
 PREFERRED_MODELS = [
     "models/gemini-1.5-flash",        # Rápido, estável — ideal para extração
-    "models/gemini-2.0-flash",        # Substituto moderno do 1.5-flash
-    "models/gemini-2.0-flash-lite",   # Mais leve, fallback
-    "models/gemini-2.5-flash",        # Thinking model — lento, último recurso
+    "models/gemini-1.5-pro",          # Mais poderoso
 ]
 
 
@@ -66,7 +64,7 @@ async def _get_gemini_model(api_key: str) -> str:
             raise Exception(f"Chave Gemini inválida (HTTP {resp.status_code})")
 
         # Modelos descontinuados que a API ainda lista mas rejeitam requests
-        DEPRECATED = {"models/gemini-2.0-flash-001", "models/gemini-pro"}
+        DEPRECATED = {"models/gemini-2.0-flash", "models/gemini-2.0-flash-001", "models/gemini-pro"}
         available = [m["name"] for m in resp.json().get("models", [])
                      if m["name"] not in DEPRECATED]
         model = None

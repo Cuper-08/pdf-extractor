@@ -31,6 +31,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 CHUNK_SIZE = 40_000        # chars por chunk (~10 páginas densas)
+CHUNK_OVERLAP = 2_000      # overlap entre chunks para não perder registros no limite
 MAX_CONCURRENT = 3         # máximo de chunks em paralelo (evita rate limit)
 
 # ─────────────────────────────────────────────
@@ -84,7 +85,7 @@ async def _call_gemini(system_prompt: str, user_text: str, api_key: str) -> str:
     payload = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"parts": [{"text": user_text}]}],
-        "generationConfig": {"temperature": 0.1},
+        "generationConfig": {"temperature": 0.0},
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=payload, timeout=120)
@@ -116,7 +117,7 @@ META_USER_TEMPLATE = """O usuário quer extrair as seguintes informações de se
 
 {user_request}
 
-Crie um system prompt preciso para que uma IA extraia esses dados.
+Crie um system prompt preciso para que uma IA extraia esses dados com máxima precisão.
 
 Retorne EXATAMENTE este JSON (sem markdown, sem texto adicional):
 {{
@@ -124,14 +125,16 @@ Retorne EXATAMENTE este JSON (sem markdown, sem texto adicional):
   "columns": ["coluna1", "coluna2", ...]
 }}
 
-O system_prompt deve:
+O system_prompt OBRIGATORIAMENTE deve:
 1. Definir exatamente quais campos extrair — serão as colunas da tabela Markdown
-2. Exigir que a saída seja EXCLUSIVAMENTE uma tabela Markdown com essas colunas
-3. Instruir a deixar células VAZIAS quando o dado não existir (NUNCA inventar)
-4. Definir UMA LINHA por registro/item encontrado
-5. Instruir a repetir campos-chave em cada linha (ex: número do processo com múltiplas partes)
-6. Instruir a ignorar cabeçalhos, rodapés e numeração de página
-7. Ser escrito em português
+2. Exigir que a saída seja EXCLUSIVAMENTE uma tabela Markdown com separador (linha |---|---|) e essas colunas exatas
+3. Instruir: NÃO adicionar nenhum texto antes nem depois da tabela — apenas a tabela Markdown
+4. Instruir a deixar células VAZIAS quando o dado não existir (NUNCA inventar dados)
+5. Definir UMA LINHA por registro/item encontrado
+6. Instruir a extrair TODOS os registros encontrados no texto, sem pular nenhum
+7. Instruir a repetir campos-chave em cada linha (ex: título do trabalho deve repetir em cada linha de coautor)
+8. Instruir a ignorar cabeçalhos, rodapés e numeração de página
+9. Ser escrito em português
 
 O campo "columns" deve listar as colunas exatas que aparecerão na tabela."""
 
@@ -174,29 +177,31 @@ async def generate_schema(user_description: str) -> dict:
 # LAYER 2 — process_pdf_extraction
 # ─────────────────────────────────────────────
 
-def smart_split(full_text: str, chunk_size: int = CHUNK_SIZE) -> list[str]:
+def smart_split(full_text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
     """
     Divide texto em chunks nas fronteiras naturais (parágrafo → frase → espaço).
-    Portado de pdf-extractor/main.py:30-52.
+    Inclui overlap entre chunks para garantir que registros no limite não sejam perdidos.
+    O dedup em consolidar_generico remove as duplicatas geradas pelo overlap.
     """
     chunks = []
     total = len(full_text)
-    start = 0
+    pos = 0
 
-    while start < total:
-        end = min(start + chunk_size, total)
+    while pos < total:
+        end = min(pos + chunk_size, total)
 
         if end < total:
-            bp = full_text.rfind("\n\n", start, end)
-            if bp == -1 or bp < start + chunk_size // 2:
-                bp = full_text.rfind(".\n", start, end)
-            if bp == -1 or bp < start + chunk_size // 2:
-                bp = full_text.rfind(". ", start, end)
-            if bp != -1 and bp > start + chunk_size // 2:
+            bp = full_text.rfind("\n\n", pos, end)
+            if bp == -1 or bp < pos + chunk_size // 2:
+                bp = full_text.rfind(".\n", pos, end)
+            if bp == -1 or bp < pos + chunk_size // 2:
+                bp = full_text.rfind(". ", pos, end)
+            if bp != -1 and bp > pos + chunk_size // 2:
                 end = bp + 1
 
-        chunks.append(full_text[start:end])
-        start = end
+        chunks.append(full_text[pos:end])
+        # Avança mantendo overlap com o próximo chunk; garante progresso mínimo de 1 char
+        pos = max(pos + 1, end - overlap)
 
     return chunks
 
@@ -239,7 +244,10 @@ async def process_pdf_extraction(pdf_bytes: bytes, schema_prompt: str) -> list[d
         records = parse_generic_table(r)
         all_records.extend(records)
 
-    # 5. Dedup e retorna
+    # 5. Remove linhas completamente vazias (ruído da IA)
+    all_records = [r for r in all_records if any(str(v).strip() for v in r.values())]
+
+    # 6. Dedup e retorna
     return consolidar_generico(all_records)
 
 
@@ -247,22 +255,46 @@ async def process_pdf_extraction(pdf_bytes: bytes, schema_prompt: str) -> list[d
 # PARSER — tabela Markdown genérica
 # ─────────────────────────────────────────────
 
+_SEPARATOR_RE = re.compile(r"^\s*\|[\s|:-]+\|\s*$")
+
+# Keywords amplamente expandidas para fallback quando não há separador
+_HEADER_KEYWORDS = {
+    "título", "titulo", "trabalho", "autor", "email", "e-mail", "nome",
+    "cnpj", "valor", "data", "número", "numero", "tipo", "parte",
+    "endereço", "endereco", "telefone", "cpf", "processo", "contrato",
+    "área", "area", "disciplina", "matéria", "materia", "tópico", "topico",
+    "descrição", "descricao", "objeto", "item", "produto", "serviço", "servico",
+    "quantidade", "qtd", "preço", "preco", "total", "empresa", "razão", "razao",
+    "social", "cargo", "função", "funcao", "cidade", "estado", "cep", "rua",
+    "documento", "registro", "código", "codigo", "classe", "categoria",
+    "responsável", "responsavel", "período", "periodo", "prazo", "vigência",
+    "vigencia", "resultado", "status", "situação", "situacao",
+}
+
+
 def parse_generic_table(markdown_text: str) -> list[dict]:
     """
     Converte tabela Markdown de qualquer estrutura em list[dict].
-    Detecta cabeçalho automaticamente.
-    Portado e generalizado de extrator_standalone.py:240-278.
-    """
-    lines = [l for l in markdown_text.split("\n") if l.strip() and "|" in l]
-    # Remove linhas separadoras (|---|---|)
-    lines = [l for l in lines if not re.match(r"^\s*\|[\s|:-]+\|\s*$", l)]
 
+    Estratégia de detecção de cabeçalho (em ordem de confiança):
+    1. Se existe linha separadora (|---|---|) após a primeira linha → primeira linha é cabeçalho (certeza)
+    2. Se alguma célula da primeira linha contém keyword de cabeçalho → cabeçalho (heurística)
+    3. Caso contrário → "Coluna 1, Coluna 2, ..." (fallback)
+    """
+    all_table_lines = [l for l in markdown_text.split("\n") if l.strip() and "|" in l]
+    if not all_table_lines:
+        return []
+
+    # Verifica se existe separador logo após a primeira linha (linhas 1 ou 2)
+    has_separator = any(_SEPARATOR_RE.match(l) for l in all_table_lines[1:3])
+
+    # Remove linhas separadoras para processamento
+    lines = [l for l in all_table_lines if not _SEPARATOR_RE.match(l)]
     if not lines:
         return []
 
     def split_row(line: str) -> list[str]:
         parts = line.split("|")
-        # Remove primeira e última parte vazias (|col1|col2| → ['', 'col1', 'col2', ''])
         if parts and not parts[0].strip():
             parts = parts[1:]
         if parts and not parts[-1].strip():
@@ -271,14 +303,10 @@ def parse_generic_table(markdown_text: str) -> list[dict]:
 
     header_candidates = split_row(lines[0])
 
-    # Detecta se primeira linha é cabeçalho
-    HEADER_KEYWORDS = {
-        "título", "titulo", "trabalho", "autor", "email", "e-mail", "nome",
-        "cnpj", "valor", "data", "número", "numero", "tipo", "parte",
-        "endereço", "endereco", "telefone", "cpf", "processo", "contrato",
-    }
-    is_header = any(
-        any(kw in col.lower() for kw in HEADER_KEYWORDS)
+    # Tem separador → primeira linha é definitivamente cabeçalho
+    # Sem separador → usa keywords como fallback
+    is_header = has_separator or any(
+        any(kw in col.lower() for kw in _HEADER_KEYWORDS)
         for col in header_candidates
     )
 
@@ -292,13 +320,14 @@ def parse_generic_table(markdown_text: str) -> list[dict]:
     records = []
     for line in data_lines:
         cols = split_row(line)
+        if not cols:
+            continue
         if len(cols) >= len(headers):
             record = {headers[i]: cols[i] for i in range(len(headers))}
-            records.append(record)
-        elif cols:
+        else:
             # Linha incompleta — preenche com vazio
             record = {headers[i]: (cols[i] if i < len(cols) else "") for i in range(len(headers))}
-            records.append(record)
+        records.append(record)
 
     return records
 

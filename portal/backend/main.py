@@ -4,27 +4,31 @@ Endpoints:
   GET  /health
   POST /generate-schema    → Layer 1: descrição → system_prompt + colunas
   POST /extract-custom     → Layer 2: PDF + schema_prompt → Job ID (async)
-  GET  /job/{id}           → Status do job (polling)
-  GET  /job/{id}/download  → Download Excel quando done
+  GET  /job/{id}           → Status do job (polling / Realtime)
+  GET  /job/{id}/download  → Download Excel ou CSV quando done
   GET  /usage              → Uso do usuário no mês atual
+  GET  /recent-schemas     → Últimos 5 schemas do usuário para reuso
 """
 import os
 import base64
 import json
+import asyncio
 from datetime import datetime
 from typing import Optional
 
 import stripe
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends, Form, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Depends, Form, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 import fitz  # PyMuPDF
+import httpx
 
 from core.auth import verify_token
 from core.database import (
     create_job,
     update_job_status,
+    update_job_progress,
     get_job,
     get_user_usage,
     check_usage_limit,
@@ -32,6 +36,7 @@ from core.database import (
     upsert_subscription,
     get_stripe_customer_id,
     get_user_email,
+    get_recent_schemas,
 )
 from core.extraction import generate_schema, process_pdf_extraction, create_excel
 
@@ -39,6 +44,7 @@ from core.extraction import generate_schema, process_pdf_extraction, create_exce
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 
 # Mapeamento price_id → nome do plano
 _PRICE_TO_PLAN: dict[str, str] = {
@@ -53,7 +59,7 @@ _PRICE_TO_PLAN: dict[str, str] = {
 
 app = FastAPI(
     title="Apex Extractor Portal API",
-    version="1.0.0",
+    version="2.0.0",
     description="API para extração inteligente de dados de PDFs via IA",
 )
 
@@ -96,6 +102,9 @@ class JobStatusResponse(BaseModel):
     columns: Optional[list[str]]
     error_message: Optional[str]
     created_at: str
+    progress_pct: int = 0
+    records_extracted: int = 0
+    preview_rows: Optional[list[dict]] = None
 
 
 # ─────────────────────────────────────────────
@@ -104,7 +113,7 @@ class JobStatusResponse(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "apex-portal-backend", "version": "1.0.0"}
+    return {"status": "ok", "service": "apex-portal-backend", "version": "2.0.0"}
 
 
 # ─────────────────────────────────────────────
@@ -156,11 +165,24 @@ async def extract_custom(
     if len(pdf_bytes) < 100:
         raise HTTPException(400, "Arquivo PDF inválido ou vazio.")
 
-    # Conta páginas antes de criar o job
+    # Conta páginas e amostra texto para detectar PDFs de imagem
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         page_count = len(doc)
+
+        # Detecta PDF sem texto (scan/imagem) — amostra as 3 primeiras páginas
+        sample_text = "".join(doc[i].get_text() for i in range(min(3, page_count)))
         doc.close()
+
+        if not sample_text.strip():
+            raise HTTPException(
+                400,
+                "Este PDF parece ser baseado em imagens (scan) e não contém texto extraível. "
+                "PDFs digitais (gerados por computador) funcionam corretamente. "
+                "Use um leitor de PDF para verificar se o texto é selecionável.",
+            )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(400, f"Não foi possível abrir o PDF: {e}")
 
@@ -192,6 +214,7 @@ async def extract_custom(
         schema_prompt=schema_prompt,
         column_list=column_list,
         page_count=page_count,
+        original_filename=file.filename or "arquivo.pdf",
     )
 
     return {"job_id": job_id, "status": "pending", "pages": page_count}
@@ -204,29 +227,108 @@ async def _run_extraction(
     schema_prompt: str,
     column_list: list[str],
     page_count: int,
+    original_filename: str = "arquivo.pdf",
 ) -> None:
-    """Background task: processa extração e persiste resultado no Supabase."""
+    """Background task: processa extração com timeout, progresso real e notificação."""
+
+    async def _on_progress(pct: int) -> None:
+        await update_job_progress(job_id, pct)
+
     try:
         await update_job_status(job_id, "processing")
 
-        records = await process_pdf_extraction(pdf_bytes, schema_prompt)
-        excel_bytes = create_excel(records, column_list)
+        # Timeout de 5 minutos para não deixar jobs pendentes para sempre
+        records = await asyncio.wait_for(
+            process_pdf_extraction(pdf_bytes, schema_prompt, on_progress=_on_progress),
+            timeout=300,
+        )
 
+        excel_bytes = create_excel(records, column_list)
         result_b64 = base64.b64encode(excel_bytes).decode()
+
+        records_count = len(records)
+        # Primeiras 5 linhas para preview no frontend (sem result_data)
+        preview = records[:5] if records else []
+
         await update_job_status(
             job_id,
             "done",
             result_data=result_b64,
             pages_processed=page_count,
+            records_extracted=records_count,
+            preview_rows=preview,
         )
         await increment_usage(user_id, page_count)
 
+        # Notificação por email (opcional — requer RESEND_API_KEY)
+        if RESEND_API_KEY:
+            email = await get_user_email(user_id)
+            if email:
+                await _send_completion_email(
+                    email=email,
+                    filename=original_filename,
+                    records=records_count,
+                    pages=page_count,
+                    job_id=job_id,
+                )
+
+    except asyncio.TimeoutError:
+        await update_job_status(
+            job_id,
+            "error",
+            error_message="Tempo limite de 5 minutos excedido. Tente com um PDF menor ou aguarde e tente novamente.",
+        )
     except Exception as e:
         await update_job_status(job_id, "error", error_message=str(e)[:500])
 
 
+async def _send_completion_email(
+    email: str,
+    filename: str,
+    records: int,
+    pages: int,
+    job_id: str,
+) -> None:
+    """Envia email de conclusão via Resend (https://resend.com)."""
+    try:
+        base_name = filename.removesuffix(".pdf")
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": "EXTR.AI <noreply@extrai.online>",
+                    "to": [email],
+                    "subject": f"✅ Extração concluída — {base_name}",
+                    "html": f"""
+                        <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+                          <h2 style="color:#16a34a">Extração concluída!</h2>
+                          <p>Seu arquivo <strong>{filename}</strong> foi processado com sucesso.</p>
+                          <ul>
+                            <li>📄 <strong>{pages}</strong> páginas processadas</li>
+                            <li>📊 <strong>{records}</strong> registros extraídos</li>
+                          </ul>
+                          <a href="{FRONTEND_URL}/app/history?job={job_id}"
+                             style="display:inline-block;padding:12px 24px;background:#16a34a;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">
+                            Baixar planilha →
+                          </a>
+                          <p style="color:#6b7280;font-size:12px;margin-top:24px">
+                            EXTR.AI · PDFs processados e não armazenados após extração
+                          </p>
+                        </div>
+                    """,
+                },
+                timeout=10,
+            )
+    except Exception:
+        pass  # e-mail é best-effort
+
+
 # ─────────────────────────────────────────────
-# GET /job/{id}  (polling de status)
+# GET /job/{id}  (polling / Realtime fallback)
 # ─────────────────────────────────────────────
 
 @app.get("/job/{job_id}", response_model=JobStatusResponse)
@@ -248,16 +350,20 @@ async def get_job_status(
         "columns": job.get("column_names"),
         "error_message": job.get("error_message"),
         "created_at": job.get("created_at", ""),
+        "progress_pct": job.get("progress_pct") or 0,
+        "records_extracted": job.get("records_extracted") or 0,
+        "preview_rows": job.get("preview_rows") or [],
     }
 
 
 # ─────────────────────────────────────────────
-# GET /job/{id}/download
+# GET /job/{id}/download  (Excel ou CSV)
 # ─────────────────────────────────────────────
 
 @app.get("/job/{job_id}/download")
 async def download_job_result(
     job_id: str,
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
     user_id: str = Depends(verify_token),
 ):
     job = await get_job(job_id)
@@ -265,7 +371,7 @@ async def download_job_result(
         raise HTTPException(404, "Job não encontrado.")
     if job.get("user_id") != user_id:
         raise HTTPException(403, "Acesso negado.")
-    if job.get("status") != "done":
+    if job.get("status") not in ("done", "completed"):
         raise HTTPException(400, f"Job ainda não concluído. Status: {job.get('status')}")
 
     result_b64 = job.get("result_data")
@@ -274,6 +380,20 @@ async def download_job_result(
 
     excel_bytes = base64.b64decode(result_b64)
     base_name = (job.get("original_filename") or "resultado").removesuffix(".pdf")
+
+    if format == "csv":
+        import pandas as pd
+        from io import BytesIO
+
+        df = pd.read_excel(BytesIO(excel_bytes))
+        csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        return Response(
+            content=csv_bytes,
+            media_type="text/csv; charset=utf-8-sig",
+            headers={
+                "Content-Disposition": f'attachment; filename="{base_name}_extrato.csv"'
+            },
+        )
 
     return Response(
         content=excel_bytes,
@@ -292,6 +412,16 @@ async def download_job_result(
 async def get_usage(user_id: str = Depends(verify_token)):
     """Retorna uso do usuário no mês corrente + limite do plano."""
     return await get_user_usage(user_id)
+
+
+# ─────────────────────────────────────────────
+# GET /recent-schemas
+# ─────────────────────────────────────────────
+
+@app.get("/recent-schemas")
+async def recent_schemas_endpoint(user_id: str = Depends(verify_token)):
+    """Retorna os últimos 5 schemas concluídos do usuário para reuso."""
+    return await get_recent_schemas(user_id)
 
 
 # ─────────────────────────────────────────────
@@ -381,7 +511,6 @@ async def stripe_webhook(request: Request):
         customer_id = data.get("customer")
 
         if user_id and subscription_id:
-            # Busca detalhes da subscription para obter o price_id
             sub = await stripe.Subscription.retrieve_async(subscription_id)
             price_id = sub["items"]["data"][0]["price"]["id"]
             plan = _PRICE_TO_PLAN.get(price_id, "starter")
@@ -403,12 +532,11 @@ async def stripe_webhook(request: Request):
         subscription_id = data["id"]
         price_id = data["items"]["data"][0]["price"]["id"]
         plan = _PRICE_TO_PLAN.get(price_id, "starter")
-        status = data["status"]  # active / past_due / canceled
+        status = data["status"]
         period_end = datetime.utcfromtimestamp(
             data["current_period_end"]
         ).isoformat()
 
-        # Busca user_id pela subscription existente no Supabase
         from core.database import _rest
         rows = await _rest(
             "GET",

@@ -18,7 +18,7 @@ import json
 import asyncio
 import unicodedata
 from io import BytesIO
-from typing import Optional
+from typing import Optional, Callable, Awaitable
 
 import fitz  # PyMuPDF
 import httpx
@@ -215,10 +215,16 @@ async def _extract_chunk(chunk: str, schema_prompt: str, sem: asyncio.Semaphore)
         )
 
 
-async def process_pdf_extraction(pdf_bytes: bytes, schema_prompt: str) -> list[dict]:
+async def process_pdf_extraction(
+    pdf_bytes: bytes,
+    schema_prompt: str,
+    on_progress: Optional[Callable[[int], Awaitable[None]]] = None,
+) -> list[dict]:
     """
     Layer 2: extrai texto do PDF → divide em chunks → processa com Gemini
     em paralelo → faz parse → dedup → retorna list[dict].
+
+    on_progress: corrotina opcional chamada após cada chunk (recebe % 0-100).
     """
     # 1. Extrai texto do PDF
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -230,10 +236,25 @@ async def process_pdf_extraction(pdf_bytes: bytes, schema_prompt: str) -> list[d
 
     # 2. Divide em chunks
     chunks = smart_split(full_text)
+    total = len(chunks)
+    completed_count = 0
 
-    # 3. Processa em paralelo com semáforo de rate limit
+    # 3. Processa em paralelo com semáforo de rate limit + rastreio de progresso
     sem = asyncio.Semaphore(MAX_CONCURRENT)
-    tasks = [_extract_chunk(chunk, schema_prompt, sem) for chunk in chunks]
+
+    async def _extract_with_progress(chunk: str) -> str:
+        nonlocal completed_count
+        result = await _extract_chunk(chunk, schema_prompt, sem)
+        completed_count += 1
+        if on_progress:
+            pct = min(99, int(completed_count / total * 100))  # 99% até salvar no DB
+            try:
+                await on_progress(pct)
+            except Exception:
+                pass  # progresso é best-effort
+        return result
+
+    tasks = [_extract_with_progress(chunk) for chunk in chunks]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # 4. Coleta registros (ignora chunks com erro)

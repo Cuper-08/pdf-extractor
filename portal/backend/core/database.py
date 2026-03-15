@@ -75,6 +75,8 @@ async def update_job_status(
     result_data: Optional[str] = None,
     pages_processed: Optional[int] = None,
     error_message: Optional[str] = None,
+    records_extracted: Optional[int] = None,
+    preview_rows: Optional[list] = None,
 ) -> None:
     patch: dict = {"status": status, "updated_at": datetime.utcnow().isoformat()}
     if result_data is not None:
@@ -83,8 +85,34 @@ async def update_job_status(
         patch["pages_processed"] = pages_processed
     if error_message is not None:
         patch["error_message"] = error_message
+    if records_extracted is not None:
+        patch["records_extracted"] = records_extracted
+    if preview_rows is not None:
+        patch["preview_rows"] = preview_rows
+    if status in ("done", "completed"):
+        patch["progress_pct"] = 100
+    elif status == "processing":
+        patch["progress_pct"] = 0
 
-    await _rest("PATCH", f"extraction_jobs?id=eq.{job_id}", json=patch)
+    try:
+        await _rest("PATCH", f"extraction_jobs?id=eq.{job_id}", json=patch)
+    except Exception:
+        # Fallback: try without new columns in case migration hasn't run yet
+        fallback = {k: v for k, v in patch.items()
+                    if k not in ("records_extracted", "preview_rows", "progress_pct")}
+        await _rest("PATCH", f"extraction_jobs?id=eq.{job_id}", json=fallback)
+
+
+async def update_job_progress(job_id: str, progress_pct: int) -> None:
+    """Atualiza somente o progresso percentual durante processamento."""
+    try:
+        await _rest(
+            "PATCH",
+            f"extraction_jobs?id=eq.{job_id}",
+            json={"progress_pct": progress_pct, "updated_at": datetime.utcnow().isoformat()},
+        )
+    except Exception:
+        pass  # progresso é best-effort
 
 
 async def get_job(job_id: str) -> Optional[dict]:
@@ -92,6 +120,20 @@ async def get_job(job_id: str) -> Optional[dict]:
     if isinstance(result, list) and result:
         return result[0]
     return None
+
+
+async def get_recent_schemas(user_id: str, limit: int = 5) -> list[dict]:
+    """Retorna os últimos N jobs concluídos do usuário (para reuso de schemas)."""
+    try:
+        result = await _rest(
+            "GET",
+            f"extraction_jobs?user_id=eq.{user_id}&status=eq.done"
+            f"&select=id,schema_prompt,column_names,original_filename,created_at"
+            f"&order=created_at.desc&limit={limit}",
+        )
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
 
 
 # ─────────────────────────────────────────────

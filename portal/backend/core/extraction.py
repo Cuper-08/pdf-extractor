@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 CHUNK_SIZE = 25_000        # chars por chunk (~6-8 páginas) — menor = respostas mais confiáveis
 CHUNK_OVERLAP = 3_000      # overlap maior garante que registros no limite entre chunks sejam capturados
-MAX_CONCURRENT = 3         # 3 paralelos + spacing garante ≤15 RPM no Gemini (free tier = 15 RPM)
-REQUEST_SPACING = 3.0      # segundos de delay entre requests — 3 workers × ~12s/cycle = ~15 RPM
+MAX_CONCURRENT = 8         # 8 workers paralelos — ideal para chave paga (não free tier)
+REQUEST_SPACING = 1.0      # 1s de delay entre releases de semáforo — ~480 RPM teórico, limitado pela API
 
 # ─────────────────────────────────────────────
 # HTTP CLIENT compartilhado (connection pool)
@@ -63,8 +63,10 @@ _model_cache: dict[str, str] = {}
 _model_lock = asyncio.Lock()
 
 PREFERRED_MODELS = [
-    "models/gemini-1.5-flash",        # Rápido, estável — ideal para extração
-    "models/gemini-1.5-pro",          # Mais poderoso
+    "models/gemini-2.5-flash-preview-05-20",  # 2.5 Flash — MAIS BARATO e rápido da geração 2.5
+    "models/gemini-2.5-flash",                # alias estável do 2.5 Flash
+    "models/gemini-2.0-flash-lite",           # fallback: 2.0 Flash Lite (ultra econômico)
+    "models/gemini-1.5-flash",                # fallback legado
 ]
 
 
@@ -84,7 +86,10 @@ async def _get_gemini_model(api_key: str) -> str:
             raise Exception(f"Chave Gemini inválida (HTTP {resp.status_code})")
 
         # Modelos descontinuados que a API ainda lista mas rejeitam requests
-        DEPRECATED = {"models/gemini-2.0-flash", "models/gemini-2.0-flash-001", "models/gemini-pro"}
+        DEPRECATED = {
+            "models/gemini-2.0-flash", "models/gemini-2.0-flash-001",
+            "models/gemini-pro", "models/gemini-1.5-pro",  # 1.5-pro é caro — nunca usar para extração
+        }
         available = [m["name"] for m in resp.json().get("models", [])
                      if m["name"] not in DEPRECATED]
         model = None

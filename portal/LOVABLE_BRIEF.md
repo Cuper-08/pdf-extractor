@@ -26,11 +26,14 @@ Build a SaaS web app called **Apex Extractor** — an AI-powered PDF data extrac
 
 **1. Landing Page (`/`)**
 - Hero section: headline "Extraia qualquer dado de PDFs com IA — sem programar" + subheadline
+- **Video Demo**: Embed um vídeo curto (ou placeholder estilizado) mostrando o produto funcionando em 30s logo abaixo ou ao lado do Hero. Isso aumenta drasticamente a conversão!
 - 3-step how it works: "Descreva → Envie o PDF → Baixe o Excel"
+- **Aviso Crítico na Landing**: Perto da área de upload e no how-it-works, adicione um banner ou warning: *"Nota: Suportamos apenas PDFs digitais (gerados por computador). Scans ou imagens digitalizadas não são suportados no momento."*
 - Features grid (6 boxes): Flexível via IA, Qualquer formato PDF, Excel formatado, Resultado em segundos, 100% seguro (PDF deletado após extração), Plataforma em nuvem
 - Pricing section (3 cards — see Pricing below)
 - CTA button: "Comece grátis — sem cartão"
-- Footer: minimal
+- **Testimonials**: Seção pequena com 2 depoimentos de especialistas reais (ex: Advogado ganhando horas por semana, Pesquisador organizando anais facilmente).
+- Footer: minimalista, mas **DEVE CONTER** links para "Termos de Uso" e "Política de Privacidade (LGPD compliance)", além de um mini-badge "Site Seguro / 100% Protegido".
 
 **2. Auth (`/login`, `/signup`)**
 - Use Supabase Auth UI component
@@ -41,6 +44,8 @@ Build a SaaS web app called **Apex Extractor** — an AI-powered PDF data extrac
 This is the MAIN screen. Must be clean, focused, step-by-step UX.
 
 Layout: centered card, max-width 720px
+
+**Onboarding Tooltip:** No primeiro login do usuário, exiba um pequeno modal/foco em tela apontando para a caixa de descrição: *"Comece descrevendo com suas próprias palavras o que deseja extrair. Ex: Nome, Valor, CNPJ."*
 
 **Step 1 — Describe extraction (always visible)**
 ```
@@ -69,6 +74,7 @@ Drag & drop zone OR click to select
 Accept: .pdf only
 Show filename + page count after selection
 Show warning if pages > plan limit
+[WARNING BANNER RED/YELLOW]: "Atenção: A extração falhará se o PDF for apenas uma imagem ou documento escaneado sem texto selecionável."
 ```
 
 **Step 3 — Extract button**

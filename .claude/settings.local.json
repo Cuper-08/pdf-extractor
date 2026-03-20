@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//tmp/apex-extractor-pro/src/**)",
+      "Read(//c/tmp/apex-extractor-pro/src/**)",
+      "Bash(xargs cat:*)"
+    ]
+  }
+}

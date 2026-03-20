@@ -155,9 +155,21 @@ NUNCA OMITA UM AUTOR. Se há 5 nomes listados, devem haver 5 linhas.
 
 # Cache global do modelo Gemini (P1: elimina requests de descoberta repetidos)
 _gemini_model_cache = {}
+_model_blacklist: set = set()  # modelos que retornaram 404 em runtime
+
+# Rate limiting proativo: máx 4 requests simultâneos + 1.5s de espaçamento entre releases.
+# Evita bursts e elimina os travamentos de 60s causados pelo 429 reativo.
+_api_semaphore = threading.Semaphore(4)
+_API_SPACING = 1.5  # segundos de espaçamento entre liberações do semáforo
 
 def _get_gemini_model(api_key):
-    """Descobre o melhor modelo Flash UMA VEZ e cacheia."""
+    """Descobre o melhor modelo Flash UMA VEZ e cacheia.
+    Filtra por supportedGenerationMethods para garantir que o modelo
+    realmente aceita generateContent (evita 404 em runtime)."""
+    # Invalida cache se o modelo cacheado foi para blacklist
+    if api_key in _gemini_model_cache and _gemini_model_cache[api_key] in _model_blacklist:
+        del _gemini_model_cache[api_key]
+
     if api_key in _gemini_model_cache:
         return _gemini_model_cache[api_key]
     
@@ -166,10 +178,23 @@ def _get_gemini_model(api_key):
     if resp_models.status_code != 200:
         raise Exception(f"Erro ao validar a chave da API do Gemini (HTTP {resp_models.status_code}): {resp_models.text}")
         
-    available_models = [m.get('name') for m in resp_models.json().get('models', [])]
+    # Filtra apenas modelos que suportam generateContent e não estão na blacklist
+    available_models = [
+        m.get('name') for m in resp_models.json().get('models', [])
+        if 'generateContent' in m.get('supportedGenerationMethods', [])
+        and m.get('name') not in _model_blacklist
+    ]
     
+    # Prioridade: modelos capazes para extração complexa (lite só como último recurso)
+    PREFERRED = [
+        "models/gemini-2.5-flash",                # ← PRIMEIRA OPÇÃO: melhor custo-benefício para extração
+        "models/gemini-2.5-flash-preview-05-20",  # fallback: 2.5 Flash Preview
+        "models/gemini-2.0-flash-001",            # fallback: 2.0 Flash padrão
+        "models/gemini-flash-latest",             # fallback: alias genérico
+        "models/gemini-2.0-flash-lite",           # último recurso (baixa qualidade para extração)
+    ]
     target_model = None
-    for pref in ["models/gemini-2.5-flash", "models/gemini-flash-latest", "models/gemini-3-flash-preview", "models/gemini-2.0-flash-001"]:
+    for pref in PREFERRED:
         if pref in available_models:
             target_model = pref
             break
@@ -192,16 +217,32 @@ def extract_from_gemini(text_content, api_key):
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": [{"parts": [{"text": f"Extraia os trabalhos deste texto:\n\n{text_content}"}]}],
-        "generationConfig": {"temperature": 0.1}
+        "generationConfig": {
+            "temperature": 0.0,       # determinístico — extração não precisa de criatividade
+            "maxOutputTokens": 65536, # margem ampla para tabelas com muitos artigos/autores
+        }
     }
     
     response = requests.post(url, headers=headers, json=payload, timeout=120)
+    if response.status_code == 404:
+        # Modelo indisponível para esta chave — adiciona à blacklist e força redescoberta
+        _model_blacklist.add(target_model)
+        _gemini_model_cache.pop(api_key, None)
+        raise Exception(
+            f"Modelo {target_model} retornou 404 (indisponível nesta chave). "
+            f"Tentando próximo modelo na redescoberta..."
+        )
     if response.status_code != 200:
         raise Exception(f"Erro da API do Gemini ({target_model}) (HTTP {response.status_code}): {response.text}")
         
     data = response.json()
     try:
-        return data['candidates'][0]['content']['parts'][0]['text']
+        text = data['candidates'][0]['content']['parts'][0]['text']
+        # Detecta truncamento: se o modelo parou por limite de tokens, a tabela está incompleta
+        finish_reason = data['candidates'][0].get('finishReason', '')
+        if finish_reason == 'MAX_TOKENS':
+            text += "\n<!-- TRUNCADO: resposta cortada pelo limite de tokens -->"
+        return text
     except (KeyError, IndexError):
         raise Exception(f"Resposta inesperada do Gemini:\n{json.dumps(data, indent=2)}")
 
@@ -224,7 +265,7 @@ def extract_from_openai(text_content, api_key):
                 "content": f"Extraia os trabalhos deste texto:\n\n{text_content}"
             }
         ],
-        "temperature": 0.1
+        "temperature": 0.0
     }
     
     response = requests.post(url, headers=headers, json=payload, timeout=120)
@@ -250,9 +291,12 @@ def parse_markdown_table_to_dicts(markdown_text):
         
     chaves = ["Títulos dos Trabalhos", "Nomes dos Autores", "E-mails dos Autores"]
     
-    # R4: Detecta se a primeira linha é cabeçalho ou dados
+    # R4: Detecta se a primeira linha é cabeçalho (Verificação rígida para evitar falso positivo)
     primeira_linha_cols = [col.strip().lower() for col in linhas_dados[0].split('|') if col.strip()]
-    is_header = any(kw in ' '.join(primeira_linha_cols) for kw in ['título', 'titulo', 'trabalho', 'autor', 'email', 'e-mail', 'nome'])
+    is_header = False
+    if len(primeira_linha_cols) > 0 and ('título' in primeira_linha_cols[0] or 'titulo' in primeira_linha_cols[0] or 'trabalho' in primeira_linha_cols[0]):
+        is_header = True
+        
     linhas_conteudo = linhas_dados[1:] if is_header else linhas_dados
     
     resultados = []
@@ -261,12 +305,11 @@ def parse_markdown_table_to_dicts(markdown_text):
         
         if len(cols) >= 3:
             email_raw = cols[2]
-            # M2: Validação de email pós-extração
+            # M2: Extração de e-mails inclusiva e segura
             email_limpo = email_raw.strip()
             if email_limpo and '@' in email_limpo:
-                # Valida formato mínimo: algo@algo.algo
-                if not re.match(r'^[\w.+-]+@[\w.-]+\.\w{2,}$', email_limpo):
-                    email_limpo = ''  # Email inválido descartado
+                emails_encontrados = re.findall(r'[\w.+-]+@[\w.-]+\.\w{2,}', email_limpo)
+                email_limpo = ", ".join(emails_encontrados) if emails_encontrados else ""
             
             obj = {
                 chaves[0]: cols[0],
@@ -839,10 +882,17 @@ class AppExtratorPDF(ctk.CTk):
                 try:
                     self.log(f"  [Bloco {fatia_idx}/{total_fatias}] Págs {start_com_overlap+1}-{end_page+1} → {provider} (tentativa {tentativa+1}/{max_retries})...")
                     if provider == "Gemini":
-                        tabela_markdown = extract_from_gemini(texto_fatia, api_key)
+                        # Rate limiting proativo: semafóro + spacing entre releases
+                        with _api_semaphore:
+                            tabela_markdown = extract_from_gemini(texto_fatia, api_key)
+                            time.sleep(_API_SPACING)
                     else:
                         tabela_markdown = extract_from_openai(texto_fatia, api_key)
                     
+                    # Detecta se a resposta foi truncada pelo limite de tokens
+                    if "<!-- TRUNCADO:" in tabela_markdown:
+                        self.log(f"  [Bloco {fatia_idx}/{total_fatias}] ⚠️ Resposta TRUNCADA pelo limite de tokens — dados podem estar incompletos")
+
                     novos_projetos = parse_markdown_table_to_dicts(tabela_markdown)
                     if novos_projetos:
                         expandidos = expandir_por_autor(novos_projetos)
@@ -891,7 +941,7 @@ class AppExtratorPDF(ctk.CTk):
     def processar_pdf(self, api_key, provider):
         try:
             pdf_path = self.pdf_path_var.get()
-            chunk_size  = 30
+            chunk_size  = 30   # 30 págs/bloco → equilíbrio entre economia e completude da extração
             overlap     = 5
             
             # U4: Pular primeiras páginas
@@ -919,6 +969,13 @@ class AppExtratorPDF(ctk.CTk):
             pages_efetivas = total_pages - skip_pages
             
             self.log(f"⚡ MODO TURBO PARALELO ATIVADO")
+            # Loga o modelo Gemini selecionado para transparência
+            if provider == "Gemini":
+                try:
+                    modelo = _get_gemini_model(self.config_data.get("gemini_api_key", ""))
+                    self.log(f"🤖 Modelo selecionado: {modelo}")
+                except Exception:
+                    pass
             self.log(f"Total: {total_pages} págs ({pages_efetivas} efetivas) | {total_fatias} blocos | 3 workers | Motor: {provider}")
             
             base_name = os.path.splitext(os.path.basename(pdf_path))[0]

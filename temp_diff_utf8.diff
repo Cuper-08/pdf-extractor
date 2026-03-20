@@ -1,0 +1,506 @@
+﻿diff --git a/extrator_standalone.py b/extrator_standalone.py
+index 88561f0..95f03dd 100644
+--- a/extrator_standalone.py
++++ b/extrator_standalone.py
+@@ -1,4 +1,5 @@
+ import os
++import re
+ import sys
+ import time
+ import json
+@@ -11,6 +12,9 @@ import customtkinter as ctk
+ import ctypes  # << Necess├írio para for├ºar o ├¡cone na barra de tarefas do Windows
+ import concurrent.futures  # Multi-threading de alta performance
+ import tkinter as tk
++import queue  # Fila thread-safe para logs
++import unicodedata  # Normaliza├º├úo Unicode para deduplica├º├úo
++from datetime import datetime  # Timestamps nos logs
+ from tkinter import filedialog, messagebox
+ 
+ # ==========================================
+@@ -149,16 +153,21 @@ NUNCA OMITA UM AUTOR. Se h├í 5 nomes listados, devem haver 5 linhas.
+ 6. Sua resposta deve conter SOMENTE a tabela Markdown ÔÇö sem texto antes ou depois.
+ """
+ 
+-def extract_from_gemini(text_content, api_key):
+-    # Faz uma descoberta din├ómica do melhor modelo Flash dispon├¡vel para esta Chave de API
++# Cache global do modelo Gemini (P1: elimina requests de descoberta repetidos)
++_gemini_model_cache = {}
++
++def _get_gemini_model(api_key):
++    """Descobre o melhor modelo Flash UMA VEZ e cacheia."""
++    if api_key in _gemini_model_cache:
++        return _gemini_model_cache[api_key]
++    
+     models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+-    resp_models = requests.get(models_url)
++    resp_models = requests.get(models_url, timeout=15)
+     if resp_models.status_code != 200:
+         raise Exception(f"Erro ao validar a chave da API do Gemini (HTTP {resp_models.status_code}): {resp_models.text}")
+         
+     available_models = [m.get('name') for m in resp_models.json().get('models', [])]
+     
+-    # Busca pela prefer├¬ncia mais recente/moderna at├® vers├úo fallback
+     target_model = None
+     for pref in ["models/gemini-2.5-flash", "models/gemini-flash-latest", "models/gemini-3-flash-preview", "models/gemini-2.0-flash-001"]:
+         if pref in available_models:
+@@ -168,29 +177,25 @@ def extract_from_gemini(text_content, api_key):
+     if not target_model:
+         flash_models = [m for m in available_models if 'flash' in m.lower()]
+         if flash_models:
+-            target_model = flash_models[0]  # Pega o mais recente (n├úo o ├║ltimo/mais antigo)
++            target_model = flash_models[0]
+         else:
+             raise Exception(f"Nenhum modelo 'Flash' encontrado na sua conta. Modelos dispon├¡veis na chave: {available_models}")
++    
++    _gemini_model_cache[api_key] = target_model
++    return target_model
+ 
+-    # Endpoint oficial din├ómico baseado no modelo encontrado
++def extract_from_gemini(text_content, api_key):
++    target_model = _get_gemini_model(api_key)  # P1: Usa cache
+     url = f"https://generativelanguage.googleapis.com/v1beta/{target_model}:generateContent?key={api_key}"
+-    headers = {
+-        "Content-Type": "application/json"
+-    }
++    headers = {"Content-Type": "application/json"}
+     
+     payload = {
+-        "systemInstruction": {
+-            "parts": [{"text": SYSTEM_PROMPT}]
+-        },
+-        "contents": [{
+-            "parts": [{"text": f"Extraia os trabalhos deste texto:\n\n{text_content}"}]
+-        }],
+-        "generationConfig": {
+-            "temperature": 0.1
+-        }
++        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
++        "contents": [{"parts": [{"text": f"Extraia os trabalhos deste texto:\n\n{text_content}"}]}],
++        "generationConfig": {"temperature": 0.1}
+     }
+     
+-    response = requests.post(url, headers=headers, json=payload, timeout=120) # TIMEOUT INDUSTRIAL: Previne que o app trave infinitamente se a conex├úo da Google der DROP silencioso
++    response = requests.post(url, headers=headers, json=payload, timeout=120)
+     if response.status_code != 200:
+         raise Exception(f"Erro da API do Gemini ({target_model}) (HTTP {response.status_code}): {response.text}")
+         
+@@ -233,26 +238,40 @@ def extract_from_openai(text_content, api_key):
+         raise Exception(f"Resposta inesperada da OpenAI:\n{json.dumps(data, indent=2)}")
+ 
+ def parse_markdown_table_to_dicts(markdown_text):
+-    """Converte a string de tabela Markdown retornada pela LLM em JSON."""
++    """Converte a string de tabela Markdown retornada pela LLM em JSON.
++    R4: Parsing defensivo ÔÇö detecta cabe├ºalho vs dados automaticamente."""
+     linhas = markdown_text.split('\n')
+     linhas = [linha for linha in linhas if linha.strip() and '|' in linha]
+     
++    # Remove linhas separadoras (---|---|---)
+     linhas_dados = [l for l in linhas if not l.replace(' ', '').replace('|', '').replace('-', '') == '']
+     if not linhas_dados:
+         return []
+         
+     chaves = ["T├¡tulos dos Trabalhos", "Nomes dos Autores", "E-mails dos Autores"]
+-    linhas_conteudo = linhas_dados[1:]
++    
++    # R4: Detecta se a primeira linha ├® cabe├ºalho ou dados
++    primeira_linha_cols = [col.strip().lower() for col in linhas_dados[0].split('|') if col.strip()]
++    is_header = any(kw in ' '.join(primeira_linha_cols) for kw in ['t├¡tulo', 'titulo', 'trabalho', 'autor', 'email', 'e-mail', 'nome'])
++    linhas_conteudo = linhas_dados[1:] if is_header else linhas_dados
+     
+     resultados = []
+     for linha in linhas_conteudo:
+         cols = [col.strip() for col in linha.split('|')][1:-1]
+         
+         if len(cols) >= 3:
++            email_raw = cols[2]
++            # M2: Valida├º├úo de email p├│s-extra├º├úo
++            email_limpo = email_raw.strip()
++            if email_limpo and '@' in email_limpo:
++                # Valida formato m├¡nimo: algo@algo.algo
++                if not re.match(r'^[\w.+-]+@[\w.-]+\.\w{2,}$', email_limpo):
++                    email_limpo = ''  # Email inv├ílido descartado
++            
+             obj = {
+                 chaves[0]: cols[0],
+                 chaves[1]: cols[1],
+-                chaves[2]: cols[2]
++                chaves[2]: email_limpo
+             }
+             resultados.append(obj)
+             
+@@ -269,6 +288,7 @@ def consolidar_projetos(projetos):
+     Merge inteligente: une linhas com mesmo t├¡tulo+autor,
+     priorizando o e-mail preenchido quando chunks diferentes
+     capturam a mesma pessoa em momentos distintos.
++    R3: Normaliza├º├úo Unicode para evitar duplicatas por encoding diferente.
+     """
+     mapa = {}
+     chave_titulo = "T├¡tulos dos Trabalhos"
+@@ -279,7 +299,10 @@ def consolidar_projetos(projetos):
+         titulo = (proj.get(chave_titulo) or "").strip()
+         autor  = (proj.get(chave_autor)  or "").strip()
+         email  = (proj.get(chave_email)  or "").strip()
+-        chave_composta = f"{titulo.lower()}|||{autor.lower()}"
++        # R3: Normaliza Unicode (NFC) para deduplica├º├úo correta de acentos
++        titulo_norm = unicodedata.normalize('NFC', titulo.lower())
++        autor_norm = unicodedata.normalize('NFC', autor.lower())
++        chave_composta = f"{titulo_norm}|||{autor_norm}"
+         
+         if chave_composta not in mapa:
+             mapa[chave_composta] = {chave_titulo: titulo, chave_autor: autor, chave_email: email}
+@@ -538,11 +561,14 @@ class AppExtratorPDF(ctk.CTk):
+         self.config_data = load_config()
+         self.is_running = False
+         self.todos_projetos = []
+-        self._lock = threading.Lock()  # Lock para acesso thread-safe aos resultados
+-        self._rate_limit_event = threading.Event()  # Sem├íforo global para rate-limit
+-        self._rate_limit_event.set()  # Come├ºa "liberado"
++        self._lock = threading.Lock()
++        self._rate_limit_event = threading.Event()
++        self._rate_limit_event.set()
++        self._log_queue = queue.Queue()  # R2: Fila thread-safe para logs
++        self._last_excel_path = None  # U5: Caminho do ├║ltimo Excel gerado
+         
+         self.mostrar_tela_login()
++        self._poll_log_queue()  # Inicia polling de logs na main thread
+ 
+     # --- TELA DE LICEN├çA (AUTENTICA├ç├âO) ---
+     def mostrar_tela_login(self):
+@@ -624,9 +650,17 @@ class AppExtratorPDF(ctk.CTk):
+ 
+         # Frame PDF
+         pdf_frame = ctk.CTkFrame(self, fg_color="transparent")
+-        pdf_frame.pack(fill="x", padx=20, pady=(10, 10))
++        pdf_frame.pack(fill="x", padx=20, pady=(10, 5))
++        
++        pdf_header = ctk.CTkFrame(pdf_frame, fg_color="transparent")
++        pdf_header.pack(fill="x")
++        ctk.CTkLabel(pdf_header, text="­ƒôä PDF para Extra├º├úo:", font=ctk.CTkFont(weight="bold")).pack(side="left")
+         
+-        ctk.CTkLabel(pdf_frame, text="­ƒôä PDF para Extra├º├úo:", font=ctk.CTkFont(weight="bold")).pack(anchor="w")
++        # U4: Pular primeiras p├íginas
++        ctk.CTkLabel(pdf_header, text="Pular p├ígs:", font=ctk.CTkFont(size=11), text_color="gray").pack(side="right", padx=(10, 5))
++        self.skip_pages_var = ctk.StringVar(value="0")
++        self.skip_pages_entry = ctk.CTkEntry(pdf_header, textvariable=self.skip_pages_var, width=45, justify="center")
++        self.skip_pages_entry.pack(side="right")
+         
+         pdf_container = ctk.CTkFrame(pdf_frame, fg_color="transparent")
+         pdf_container.pack(fill="x", pady=(5, 0))
+@@ -639,18 +673,24 @@ class AppExtratorPDF(ctk.CTk):
+ 
+         # Frame de Logs
+         log_frame = ctk.CTkFrame(self)
+-        log_frame.pack(fill="both", expand=True, padx=20, pady=(10, 20))
++        log_frame.pack(fill="both", expand=True, padx=20, pady=(5, 10))
++        
++        # U1: Barra de progresso com ETA
++        progress_header = ctk.CTkFrame(log_frame, fg_color="transparent")
++        progress_header.pack(fill="x", padx=10, pady=(10, 2))
++        self.eta_label = ctk.CTkLabel(progress_header, text="", font=ctk.CTkFont(size=11), text_color="gray")
++        self.eta_label.pack(side="right")
+         
+         self.progress_bar = ctk.CTkProgressBar(log_frame, mode="determinate")
+-        self.progress_bar.pack(fill="x", padx=10, pady=(10, 5))
++        self.progress_bar.pack(fill="x", padx=10, pady=(0, 5))
+         self.progress_bar.set(0)
+         
+         self.log_text = ctk.CTkTextbox(log_frame, state="disabled", fg_color="transparent")
+         self.log_text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+         
+-        # Bot├úo 3D Met├ílico
++        # R1: Bot├úo 3D Met├ílico (com fun├º├úo de cancela/inicia)
+         self.start_btn = MetalButton3D(self, text="ÔûÂ  INICIAR EXTRA├ç├âO AUTOM├üTICA",
+-                                       command=self.iniciar_extracao_thread, height=54)
++                                       command=self._toggle_extracao, height=54)
+         self.start_btn.pack(fill="x", padx=20, pady=(0, 20))
+ 
+     def on_provider_change(self, choice):
+@@ -691,11 +731,31 @@ class AppExtratorPDF(ctk.CTk):
+                 messagebox.showerror("Erro", "A chave n├úo pode estar vazia.")
+ 
+     def log(self, message):
+-        self.log_text.configure(state="normal")
+-        self.log_text.insert("end", message + "\n")
+-        self.log_text.see("end")
+-        self.log_text.configure(state="disabled")
+-        self.update_idletasks()
++        """R2: Thread-safe logging via queue. U3: Timestamps autom├íticos."""
++        ts = datetime.now().strftime("%H:%M:%S")
++        self._log_queue.put(f"[{ts}] {message}")
++    
++    def _poll_log_queue(self):
++        """Processa fila de logs na main thread (seguro para Tkinter)."""
++        try:
++            while True:
++                msg = self._log_queue.get_nowait()
++                self.log_text.configure(state="normal")
++                self.log_text.insert("end", msg + "\n")
++                self.log_text.see("end")
++                self.log_text.configure(state="disabled")
++        except queue.Empty:
++            pass
++        self.after(100, self._poll_log_queue)  # Polling a cada 100ms
++    
++    def _toggle_extracao(self):
++        """R1: Alterna entre iniciar e cancelar extra├º├úo."""
++        if self.is_running:
++            self.is_running = False
++            self.log("Ôøö Cancelamento solicitado... aguarde os workers finalizarem.")
++            self.start_btn.configure(text="ÔÅ│ CANCELANDO...")
++        else:
++            self.iniciar_extracao_thread()
+         
+     def escolher_pdf(self):
+         filepath = filedialog.askopenfilename(
+@@ -723,7 +783,6 @@ class AppExtratorPDF(ctk.CTk):
+             return
+ 
+         # === Trava Militar Anti-Malandragem ===
+-        # Revalida silenciosamente a licen├ºa antes de cada extra├º├úo pro caso do admin ter cancelado
+         self.start_btn.configure(state="disabled", text="­ƒøí´©Å Verificando Licen├ºa Criptografada...")
+         self.update()
+         
+@@ -731,9 +790,10 @@ class AppExtratorPDF(ctk.CTk):
+         sucesso, msg_licenca = validate_license(chave_licenca)
+         if not sucesso:
+             messagebox.showerror("Acesso Revogado", f"Acesso Negado: Sua licen├ºa foi cancelada, suspensa ou n├úo existe mais no servidor.\nO aplicativo ser├í encerrado de forma for├ºada imediatamente.\n\nMotivo do Banco de Dados: {msg_licenca}")
+-            sys.exit(0)  # Mata a aplica├º├úo instantaneamente
++            sys.exit(0)
+             
+-        self.start_btn.configure(state="disabled", text="ÔÅ│ EXTRAINDO DADOS...")
++        # R1: Bot├úo vira "Cancelar" durante extra├º├úo
++        self.start_btn.configure(state="normal", text="ÔÅ╣ CANCELAR EXTRA├ç├âO")
+         self.is_running = True
+         
+         self.log_text.configure(state="normal")
+@@ -741,24 +801,29 @@ class AppExtratorPDF(ctk.CTk):
+         self.log_text.configure(state="disabled")
+         
+         self.progress_bar.set(0)
++        self.eta_label.configure(text="")
+         self.todos_projetos = []
++        self._last_excel_path = None
+         
+-        # Thread para IA
+         t = threading.Thread(target=self.processar_pdf, args=(api_key_salva, provider))
+         t.daemon = True
+         t.start()
+ 
+     def _worker_fatia(self, fatia_idx, total_fatias, start_com_overlap, end_page, pdf_path, api_key, provider):
+         """Worker thread: extrai dados de uma fatia do PDF com retry e backoff.
+-        Cada thread abre seu pr├│prio handle do PDF (seguran├ºa PyMuPDF).
+-        Respeita sem├íforo global de rate-limit."""
++        P2: Texto lido com list+join. M1: Normaliza emails fragmentados."""
+         try:
+             doc = fitz.open(pdf_path)
+-            texto_fatia = ""
++            # P2: Concatena├º├úo otimizada via list+join
++            parts = []
+             for page_num in range(start_com_overlap, end_page + 1):
+-                page = doc.load_page(page_num)
+-                texto_fatia += page.get_text("text") + "\n\n"
++                parts.append(doc.load_page(page_num).get_text("text"))
+             doc.close()
++            texto_fatia = "\n\n".join(parts)
++            
++            # M1: Normaliza emails fragmentados (espa├ºo antes do @)
++            texto_fatia = re.sub(r'(\S)\s+@', r'\1@', texto_fatia)
++            texto_fatia = re.sub(r'@\s+(\S)', r'@\1', texto_fatia)
+             
+             if not texto_fatia.strip():
+                 self.log(f"  [Bloco {fatia_idx}/{total_fatias}] P├ígs {start_com_overlap+1}-{end_page+1}: vazio, pulando.")
+@@ -769,7 +834,6 @@ class AppExtratorPDF(ctk.CTk):
+                 if not self.is_running:
+                     return (fatia_idx, [])
+                 
+-                # Aguarda sem├íforo global de rate-limit (se outro worker detectou 429, todos pausam)
+                 self._rate_limit_event.wait()
+                 
+                 try:
+@@ -797,7 +861,6 @@ class AppExtratorPDF(ctk.CTk):
+                                         "insufficient_quota" in erro_msg.lower())
+                         if is_rate_limit:
+                             wait_time = 60
+-                            import re
+                             match = re.search(r"retry in ([\d\.]+)s", erro_msg)
+                             if match:
+                                 wait_time = int(float(match.group(1))) + 5
+@@ -810,18 +873,17 @@ class AppExtratorPDF(ctk.CTk):
+                                     if match_openai:
+                                         wait_time = int(float(match_openai.group(1))) + 5
+                             
+-                            # TRAVA GLOBAL: pausa TODOS os workers para n├úo saturar a API
+                             self.log(f"  [Bloco {fatia_idx}] ÔÜá´©Å Rate-limit 429! Travando TODOS os workers por {wait_time}s...")
+-                            self._rate_limit_event.clear()  # Bloqueia todos
++                            self._rate_limit_event.clear()
+                             time.sleep(wait_time)
+-                            self._rate_limit_event.set()  # Libera todos
++                            self._rate_limit_event.set()
+                         else:
+                             self.log(f"  [Bloco {fatia_idx}] Erro API (tentativa {tentativa+1}): {erro_msg[:120]}")
+                             time.sleep(5)
+                     else:
+                         self.log(f"  [Bloco {fatia_idx}/{total_fatias}] ÔØî FALHA AP├ôS {max_retries} TENTATIVAS: {erro_msg[:120]}")
+             
+-            return (fatia_idx, None)  # None = falha definitiva (diferente de [] = sem dados)
++            return (fatia_idx, None)
+         except Exception as e:
+             self.log(f"  [Bloco {fatia_idx}] ERRO WORKER: {str(e)[:120]}")
+             return (fatia_idx, None)
+@@ -829,33 +891,45 @@ class AppExtratorPDF(ctk.CTk):
+     def processar_pdf(self, api_key, provider):
+         try:
+             pdf_path = self.pdf_path_var.get()
+-            chunk_size  = 30  # Janela expandida para menos cortes de artigo
+-            overlap     = 5   # Sobreposi├º├úo: evita cortar rodap├® de e-mails
++            chunk_size  = 30
++            overlap     = 5
++            
++            # U4: Pular primeiras p├íginas
++            try:
++                skip_pages = int(self.skip_pages_var.get())
++            except ValueError:
++                skip_pages = 0
+             
+             self.log(f"Abrindo arquivo PDF...")
+             doc = fitz.open(pdf_path)
+             total_pages = len(doc)
+-            doc.close()  # Fecha o handle principal; cada worker abrir├í o seu
++            doc.close()
+             
+-            # Calcula todas as fatias antecipadamente
++            if skip_pages > 0:
++                self.log(f"ÔÅ® Pulando as primeiras {skip_pages} p├íginas (capa/sum├írio).")
++            
++            # Calcula fatias a partir de skip_pages
+             fatias = []
+-            for start_page in range(0, total_pages, chunk_size):
+-                start_com_overlap = max(0, start_page - overlap)
++            for start_page in range(skip_pages, total_pages, chunk_size):
++                start_com_overlap = max(skip_pages, start_page - overlap)
+                 end_page = min(start_page + chunk_size, total_pages) - 1
+                 fatias.append((start_com_overlap, end_page))
+             
+             total_fatias = len(fatias)
++            pages_efetivas = total_pages - skip_pages
+             
+             self.log(f"ÔÜí MODO TURBO PARALELO ATIVADO")
+-            self.log(f"Total de P├íginas: {total_pages} | {total_fatias} blocos | 3 workers simult├óneos | Motor: {provider}")
++            self.log(f"Total: {total_pages} p├ígs ({pages_efetivas} efetivas) | {total_fatias} blocos | 3 workers | Motor: {provider}")
+             
+             base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+             base_dir = os.path.dirname(pdf_path)
+             excel_filename = os.path.join(base_dir, f"{base_name}_Extraido.xlsx")
++            self._last_excel_path = excel_filename
+             
+             # ========== FASE 1: Disparo paralelo ==========
+             concluidas = 0
+-            fatias_falhadas = []  # Re-queue das que falharam
++            fatias_falhadas = []
++            time_start = time.time()  # U1: Cron├┤metro para ETA
+             
+             with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                 futures = {}
+@@ -865,31 +939,41 @@ class AppExtratorPDF(ctk.CTk):
+                 
+                 for future in concurrent.futures.as_completed(futures):
+                     if not self.is_running:
+-                        self.log("Processo cancelado!")
++                        self.log("Ôøö Processo cancelado pelo usu├írio!")
++                        executor.shutdown(wait=False, cancel_futures=True)
+                         break
+                     
+                     fatia_num, s, e = futures[future]
+                     fatia_idx, resultados_fatia = future.result()
+                     concluidas += 1
+                     
++                    # U1: Calcula ETA
++                    elapsed = time.time() - time_start
++                    if concluidas > 0:
++                        avg_per_block = elapsed / concluidas
++                        remaining = (total_fatias - concluidas) * avg_per_block
++                        mins, secs = divmod(int(remaining), 60)
++                        self.eta_label.configure(text=f"ÔÅ▒ ~{mins}m{secs:02d}s restantes")
++                    
+                     if resultados_fatia is None:
+-                        # Falha definitiva ÔåÆ salva para segunda passada
+                         fatias_falhadas.append((fatia_idx, s, e))
+                     elif resultados_fatia:
+                         with self._lock:
+                             self.todos_projetos.extend(resultados_fatia)
+                             self.todos_projetos = consolidar_projetos(self.todos_projetos)
+                             
+-                            try:
+-                                salvar_excel_formatado(self.todos_projetos, excel_filename)
+-                            except PermissionError as pe:
+-                                self.log(f"  -> AVISO: {str(pe)}")
+-                            except Exception as ee:
+-                                self.log(f"  -> ERRO ao salvar Excel: {str(ee)}")
++                            # P3: Debounce ÔÇö salva Excel a cada 3 blocos (n├úo a cada 1)
++                            if concluidas % 3 == 0 or concluidas == total_fatias:
++                                try:
++                                    salvar_excel_formatado(self.todos_projetos, excel_filename)
++                                except PermissionError as pe:
++                                    self.log(f"  -> AVISO: {str(pe)}")
++                                except Exception as ee:
++                                    self.log(f"  -> ERRO ao salvar Excel: {str(ee)}")
+                     
+                     self.progress_bar.set(concluidas / float(total_fatias))
+             
+-            # ========== FASE 2: Retentativa sequencial das fatias que falharam ==========
++            # ========== FASE 2: Retentativa sequencial ==========
+             if fatias_falhadas and self.is_running:
+                 self.log(f"\n­ƒöä FASE 2: Retentando {len(fatias_falhadas)} blocos que falharam (modo sequencial)...")
+                 for fatia_idx, s, e in fatias_falhadas:
+@@ -901,7 +985,7 @@ class AppExtratorPDF(ctk.CTk):
+                         with self._lock:
+                             self.todos_projetos.extend(resultados)
+                             self.todos_projetos = consolidar_projetos(self.todos_projetos)
+-                            self.log(f"  [Bloco {fatia_idx}] ­ƒöü Recuperado! +{len(resultados)} linhas. Total: {len(self.todos_projetos)}")
++                            self.log(f"  [Bloco {fatia_idx}] ­ƒöü Recuperado! +{len(resultados)} linhas")
+                             try:
+                                 salvar_excel_formatado(self.todos_projetos, excel_filename)
+                             except Exception:
+@@ -910,15 +994,36 @@ class AppExtratorPDF(ctk.CTk):
+                         self.log(f"  [Bloco {fatia_idx}] ÔØî Falha definitiva mesmo na retentativa.")
+             
+             # ========== Salvamento final e relat├│rio ==========
+-            if self.is_running:
+-                # Relat├│rio de cobertura
++            if self.is_running and self.todos_projetos:
++                # Salvamento final garantido
++                try:
++                    salvar_excel_formatado(self.todos_projetos, excel_filename)
++                except Exception:
++                    pass
++                
++                elapsed_total = time.time() - time_start
++                mins, secs = divmod(int(elapsed_total), 60)
+                 emails_extraidos = sum(1 for p in self.todos_projetos if p.get('E-mails dos Autores', '').strip())
++                
++                self.eta_label.configure(text=f"Ô£à Conclu├¡do em {mins}m{secs:02d}s")
+                 self.log(f"\n­ƒÄë PROCESSO CONCLU├ìDO 100%!")
+-                self.log(f"­ƒôè Relat├│rio: {len(self.todos_projetos)} linhas totais | {emails_extraidos} com e-mail")
++                self.log(f"­ƒôè Relat├│rio: {len(self.todos_projetos)} linhas | {emails_extraidos} com e-mail | Tempo: {mins}m{secs:02d}s")
+                 if fatias_falhadas:
+                     self.log(f"ÔÜá´©Å {len(fatias_falhadas)} blocos tiveram problemas (retentados na Fase 2).")
+-                self.log(f"Planilha finalizada salva em:\n{excel_filename}")
+-                messagebox.showinfo("Sucesso", f"Extra├º├úo conclu├¡da!\n\nForam encontrados {len(self.todos_projetos)} itens no total.\n{emails_extraidos} com e-mail associado.\nO arquivo Excel foi criado/atualizado com sucesso.")
++                self.log(f"Planilha salva em: {excel_filename}")
++                
++                # U5: Pergunta se quer abrir a planilha
++                abrir = messagebox.askyesno("Sucesso", 
++                    f"Extra├º├úo conclu├¡da!\n\n"
++                    f"ÔÇó {len(self.todos_projetos)} linhas totais\n"
++                    f"ÔÇó {emails_extraidos} com e-mail\n"
++                    f"ÔÇó Tempo: {mins}m{secs:02d}s\n\n"
++                    f"Deseja abrir a planilha agora?")
++                if abrir:
++                    os.startfile(excel_filename)
++            elif not self.todos_projetos and self.is_running:
++                self.log("\nÔÜá´©Å Nenhum dado extra├¡do. Verifique se o PDF cont├®m trabalhos acad├¬micos.")
++                messagebox.showwarning("Aviso", "Nenhum dado foi extra├¡do do PDF.")
+             
+         except Exception as e:
+             self.log(f"\nERRO FATAL: {str(e)}")

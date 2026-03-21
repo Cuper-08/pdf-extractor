@@ -186,8 +186,9 @@ def _get_gemini_model(api_key):
     PREFERRED = [
         "models/gemini-2.0-flash-lite-preview-02-05", # O modelo mais barato e rápido do Google
         "models/gemini-2.0-flash-lite",               # Fallback para versão final do Lite
-        "models/gemini-2.0-flash",                    # Flash 2.0 (mais barato que o 2.5)
-        "models/gemini-2.5-flash",                    # Flash 2.5
+        "models/gemini-1.5-flash-8b",                 # Modelo 1.5 super otimizado para economia extrema
+        "models/gemini-1.5-flash",                    # O 1.5 Flash clássico, excelente e hiper barato
+        "models/gemini-2.0-flash",                    # Flash 2.0
         "models/gemini-flash-latest"                  # Genérico
     ]
     target_model = None

@@ -1,0 +1,92 @@
+--- GET_TEXT('text') ---
+22  |  ANAIS DO VII Seminário Cientifico sobre Agricultura Familiar 2018
+ACOMPANHAMENTO ADMINSTRATIVO NA 
+COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL 
+FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO 
+SEIFERT. R. J. L.1; ROSENBURG, J. A.¹; 
+SANTOS, G. A. S.2; COSTA, L. A. S.3
+Um facilitador para os produtores que estão na categoria de propriedade familiar, 
+é a integralização em cooperativas agroindustriais que fortificam o poder de com-
+pra da matéria-prima e venda dos itens produzidos pelas famílias, gerando maior 
+rotatividade de produtos agroindustriais. Este trabalho tem por objetivo retratar 
+a experiência de consultoria na condução das rotinas administrativas realizadas na 
+Cooperativa de Produção Agroindustrial Familiar do Sudoeste Goiano (Coopfas) 
+situada no Município de Jataí. Foram realizadas visitas semanais, por integrantes 
+do projeto de extensão PROSOL/INCUBADORA ADJUNTA TECNOLÓGI-
+CA DE COOPERATIVAS POPULARES E NEGÓCIOS SOCIAIS da Univer-
+sidade Estadual de Goiás, campus-Jataí, contabilizando 30 horas. Observou-se 
+que não existia um cadastro administrativo na cooperativa dos cooperados, com 
+informações pessoais e de sua propriedade, dificultando assim a comunicação en-
+tre as partes. Foram sugeridas propostas facilitadoras para organizar e otimizar as 
+rotinas administrativas, as sugestões foram aceitas e implantadas. Foram produzi-
+das fichas e planilhas para controle e cadastro dos cooperados, como cooperados 
+ativos no programa: CESTAAGROFAMILIAR (vendas realizadas on-line da pro-
+dução dos cooperados, comercializados pelo site da cooperativa como intermediá-
+ria das vendas), registro dos dados de todos os cooperados que possuem ou não 
+a DAP-Declaração de Aptidão ao Pronaf (comprovação de enquadramento do 
+agricultor como pequeno produtor) e seus respectivos vencimentos. Este controle 
+das informações permitiu que as planilhas informassem as DAP´s vencidas ou 
+com vencimento nos próximos 30 dias e otimizou também a busca de informa-
+ções cadastrais dos cooperados, aprimorando a comunicação da cooperativa com 
+o cooperado. 
+1	
+Discente do Curso Superior de Tecnologia em Logística, voluntário, da Universidade Estadual de 
+Goiás – Câmpus Jataí.
+2	
+Discente do Curso Superior de Engenharia Florestal, voluntário, da Universidade Federal de 
+Goiás – Regional Jataí.
+3	
+Docente, Matemática, Pós graduada em Matemática e Agronegócio, Universidade Estadual de 
+Goiás – Câmpus Jataí.
+
+
+--- GET_TEXT('blocks') ---
+(28.346500396728516, 562.1189575195312, 295.0939636230469, 572.6669921875, '22  |  ANAIS DO VII Seminário Cientifico sobre Agricultura Familiar 2018\n', 0, 0)
+(43.88330078125, 26.258813858032227, 327.5129089355469, 69.47086334228516, 'ACOMPANHAMENTO ADMINSTRATIVO NA \nCOOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL \nFAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO \n', 1, 0)
+(174.73390197753906, 88.51930236816406, 342.658447265625, 113.22930145263672, 'SEIFERT. R. J. L.1; ROSENBURG, J. A.¹; \nSANTOS, G. A. S.2; COSTA, L. A. S.3\n', 2, 0)
+(28.346399307250977, 127.17689514160156, 342.6964416503906, 415.88690185546875, 'Um facilitador para os produtores que estão na categoria de propriedade familiar, \né a integralização em cooperativas agroindustriais que fortificam o poder de com-\npra da matéria-prima e venda dos itens produzidos pelas famílias, gerando maior \nrotatividade de produtos agroindustriais. Este trabalho tem por objetivo retratar \na experiência de consultoria na condução das rotinas administrativas realizadas na \nCooperativa de Produção Agroindustrial Familiar do Sudoeste Goiano (Coopfas) \nsituada no Município de Jataí. Foram realizadas visitas semanais, por integrantes \ndo projeto de extensão PROSOL/INCUBADORA ADJUNTA TECNOLÓGI-\nCA DE COOPERATIVAS POPULARES E NEGÓCIOS SOCIAIS da Univer-\nsidade Estadual de Goiás, campus-Jataí, contabilizando 30 horas. Observou-se \nque não existia um cadastro administrativo na cooperativa dos cooperados, com \ninformações pessoais e de sua propriedade, dificultando assim a comunicação en-\ntre as partes. Foram sugeridas propostas facilitadoras para organizar e otimizar as \nrotinas administrativas, as sugestões foram aceitas e implantadas. Foram produzi-\ndas fichas e planilhas para controle e cadastro dos cooperados, como cooperados \nativos no programa: CESTAAGROFAMILIAR (vendas realizadas on-line da pro-\ndução dos cooperados, comercializados pelo site da cooperativa como intermediá-\nria das vendas), registro dos dados de todos os cooperados que possuem ou não \na DAP-Declaração de Aptidão ao Pronaf (comprovação de enquadramento do \nagricultor como pequeno produtor) e seus respectivos vencimentos. Este controle \ndas informações permitiu que as planilhas informassem as DAP´s vencidas ou \ncom vencimento nos próximos 30 dias e otimizou também a busca de informa-\nções cadastrais dos cooperados, aprimorando a comunicação da cooperativa com \no cooperado. \n', 3, 0)
+(28.346399307250977, 477.5775146484375, 342.1871032714844, 497.3454895019531, '1\t\nDiscente do Curso Superior de Tecnologia em Logística, voluntário, da Universidade Estadual de \nGoiás – Câmpus Jataí.\n', 4, 0)
+(28.34640121459961, 499.6094970703125, 342.1871032714844, 519.37744140625, '2\t\nDiscente do Curso Superior de Engenharia Florestal, voluntário, da Universidade Federal de \nGoiás – Regional Jataí.\n', 5, 0)
+(28.34640121459961, 521.6414794921875, 342.1863708496094, 541.4094848632812, '3\t\nDocente, Matemática, Pós graduada em Matemática e Agronegócio, Universidade Estadual de \nGoiás – Câmpus Jataí.\n', 6, 0)
+
+
+--- GET_TEXT('dict') lines ---
+22  |   ANAIS DO VII Seminário Cientifico sobre Agricultura Familiar 2018 
+ACOMPANHAMENTO ADMINSTRATIVO NA  
+COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL  
+FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO  
+SEIFERT. R. J. L. 1 ; ROSENBURG, J. A.¹;  
+SANTOS, G. A. S. 2 ; COSTA, L. A. S. 3 
+Um facilitador para os produtores que estão na categoria de propriedade familiar,  
+é a integralização em cooperativas agroindustriais que fortificam o poder de com- 
+pra da matéria-prima e venda dos itens produzidos pelas famílias, gerando maior  
+rotatividade de produtos agroindustriais. Este trabalho tem por objetivo retratar  
+a experiência de consultoria na condução das rotinas administrativas realizadas na  
+Cooperativa de Produção Agroindustrial Familiar do Sudoeste Goiano (Coopfas)  
+situada no Município de Jataí. Foram realizadas visitas semanais, por integrantes  
+do projeto de extensão PROSOL/INCUBADORA ADJUNTA TECNOLÓGI- 
+CA DE COOPERATIVAS POPULARES E NEGÓCIOS SOCIAIS da Univer- 
+sidade Estadual de Goiás, campus-Jataí, contabilizando 30 horas. Observou-se  
+que não existia um cadastro administrativo na cooperativa dos cooperados, com  
+informações pessoais e de sua propriedade, dificultando assim a comunicação en- 
+tre as partes. Foram sugeridas propostas facilitadoras para organizar e otimizar as  
+rotinas administrativas, as sugestões foram aceitas e implantadas. Foram produzi- 
+das fichas e planilhas para controle e cadastro dos cooperados, como cooperados  
+ativos no programa: CESTAAGROFAMILIAR (vendas realizadas on-line da pro- 
+dução dos cooperados, comercializados pelo site da cooperativa como intermediá- 
+ria das vendas), registro dos dados de todos os cooperados que possuem ou não  
+a DAP-Declaração de Aptidão ao Pronaf (comprovação de enquadramento do  
+agricultor como pequeno produtor) e seus respectivos vencimentos. Este controle  
+das informações permitiu que as planilhas informassem as DAP´s vencidas ou  
+com vencimento nos próximos 30 dias e otimizou também a busca de informa- 
+ções cadastrais dos cooperados, aprimorando a comunicação da cooperativa com  
+o cooperado.  
+1	 
+Discente do Curso Superior de Tecnologia em Logística, voluntário, da Universidade Estadual de  
+Goiás – Câmpus Jataí. 
+2	 
+Discente do Curso Superior de Engenharia Florestal, voluntário, da Universidade Federal de  
+Goiás – Regional Jataí. 
+3	 
+Docente, Matemática, Pós graduada em Matemática e Agronegócio, Universidade Estadual de  
+Goiás – Câmpus Jataí. 

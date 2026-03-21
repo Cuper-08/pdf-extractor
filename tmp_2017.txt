@@ -1,0 +1,37 @@
+--- PÁGINA 14 ---
+EMAILS ENCONTRADOS: ['jmoaureliano@gmail.com.', 'delson_fagundes62@hotmail.com.', 'pvictor.santos10@gmail.com.', 'fredericopdasilva@gmail.com']
+--- FINAL DA PÁGINA ---
+IBIC
+3 Docente, Engenheira de alimentos, Doutora em Sanidade Animal, Higiene e Tecnologia de Ali-
+mentos, IFGoiano Campus Morrinhos. 
+4  Docente, Químico, Mestre em Recursos Hidrícos e Saneamento Ambiental, IF Goiano – Campus 
+Morrinhos.
+COMPARAÇÃO DE DOIS MÉTODOS DE ESTIMATIVA 
+DA EVAPOTRANSPIRAÇÃO DE REFERÊNCIA PARA A 
+REGIÃO DE PLANALTINA – DF
+AURELIANO, J.M.O1, SOUSA, D.F.2, PEREIRA, P.V3, SILVA, F.P4
+A agricultura irrigada para que haja sucesso necessita de um manejo adequado, 
+de forma a suprir as necessidades hídricas das culturas, a lâmina a ser aplicada e 
+o momento correto da irrigação. Uma forma de verificar a eficiência de métodos 
+de estimativa da evapotranspiração de referência (ETo) é pela comparação com 
+o método-padrão. Este trabalho tem por finalidade comparar o método de esti-
+mativa da ETo: Thornthwaite, 1948 em relação ao método de Penman-Monteith 
+(PM), em período com dados médios quinzenais para os períodos outono-inver-
+no-primavera. A pesquisa foi desenvolvida na região Águas Emendadas, próximo 
+à cidade de Planaltina - DF, onde existe uma estação meteorológica automatizada. 
+Por intermédio da estação meteorológica automatizada, foram obtidas medidas da 
+radiação solar global, saldo de radiação, temperatura do ar, umidade relativa do ar 
+e velocidade do vento. A análise usada foi de estatística descritiva. Os resultados 
+obtidos neste estudo evidenciam que o método Thornthwaite, 1948 se aproxima 
+em valores da ETo do método Penman-Monteith (PM). O método Thornthwaite, 
+1948 mediante a análise mostrou ser um método alternativo de determinação de 
+ETo, sendo uma opção para o manejo da irrigação.
+1  Aluno, curso Agroecologia, IFB – Campus Planaltina. jmoaureliano@gmail.com.
+2  Aluno, curso Agroecologia, IFB – Campus Planaltina. delson_fagundes62@hotmail.com.
+3  Aluno, curso Agroecologia, IFB – Campus Planaltina. pvictor.santos10@gmail.com.
+4  Professor orientador, curso Agroecologia, IFB – Campus Planaltina. fredericopdasilva@gmail.com
+SUMÁRIO
+
+
+==================================================
+

@@ -941,8 +941,8 @@ class AppExtratorPDF(ctk.CTk):
     def processar_pdf(self, api_key, provider):
         try:
             pdf_path = self.pdf_path_var.get()
-            chunk_size  = 30   # 30 págs/bloco → equilíbrio entre economia e completude da extração
-            overlap     = 5
+            chunk_size  = 12   # 12 págs/bloco → lotes menores para garantir que a IA não sofra de 'preguiça' e extraia TUDO
+            overlap     = 3
             
             # U4: Pular primeiras páginas
             try:

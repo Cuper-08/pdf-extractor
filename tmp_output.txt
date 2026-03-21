@@ -1,0 +1,89 @@
+--- ANALISANDO EXCEL ---
+Total de linhas: 1602
+Colunas: ['Títulos dos Trabalhos', 'Nomes dos Autores', 'E-mails dos Autores']
+Amostra dos dados (primeiras 5 linhas):
+                                                                                            Títulos dos Trabalhos  Nomes dos Autores E-mails dos Autores
+0  ACOMPANHAMENTO ADMINSTRATIVO NA COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO  SEIFERT. R. J. L.                 NaN
+1  ACOMPANHAMENTO ADMINSTRATIVO NA COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO          ROSENBURG                 NaN
+2  ACOMPANHAMENTO ADMINSTRATIVO NA COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO              J. A.                 NaN
+3  ACOMPANHAMENTO ADMINSTRATIVO NA COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO             SANTOS                 NaN
+4  ACOMPANHAMENTO ADMINSTRATIVO NA COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO           G. A. S.                 NaN
+Nenhuma coluna de email encontrada.
+Amostras com email vazio:
+                                                                                            Títulos dos Trabalhos  Nomes dos Autores E-mails dos Autores
+0  ACOMPANHAMENTO ADMINSTRATIVO NA COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO  SEIFERT. R. J. L.                 NaN
+1  ACOMPANHAMENTO ADMINSTRATIVO NA COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO          ROSENBURG                 NaN
+2  ACOMPANHAMENTO ADMINSTRATIVO NA COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO              J. A.                 NaN
+3  ACOMPANHAMENTO ADMINSTRATIVO NA COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO             SANTOS                 NaN
+4  ACOMPANHAMENTO ADMINSTRATIVO NA COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO           G. A. S.                 NaN
+
+--- ANALISANDO PDF (Páginas 20 a 25) ---
+
+--- PÁGINA 21 ---
+DIFICULDADES DE ACESSO AO MERCADO POR PRODUTORES DE PE-
+QUENOS VOLUMES............................................................................................199
+EMPRESA JÚNIOR: DESENVOLVENDO O COMPORTAMENTO EM-
+PREENDEDOR PARA O AGRONEGÓCIO.....................................................200
+ESTÁGIO DE EXPERIÊNCIA EM AGROECOLOGIA E CONSTRUÇÃO DE 
+SABERES.................................................................................................................201
+IMPLEMENTAÇÃO DE SISTEMA DE INTEGRAÇÃO LAVOURA-PE-
+CUÁRIA-FLORESTA PARA GERAÇÃO DE RENDA EM CRISTIANÓPO-
+LIS – GO.......................................................................................................202
+LIMPEZA DE RESÍDUOS SÓLIDOS NA ASSOCIAÇÃO AMIGOS DOS ANI-
+MAIS EM BARRA DO GARÇAS – MT.............................................................203
+PERSPECTIVA DE RENDA COM A CRIAÇÃO AGROECOLÓGICA DE 
+SUÍNOS EM ASSENTAMENTOS RURAIS NO MUNICÍPIO DE BARRA DO 
+GARÇAS-MT............................
+...
+Emails encontrados na página 21: []
+
+--- PÁGINA 22 ---
+
+...
+Emails encontrados na página 22: []
+
+--- PÁGINA 23 ---
+ANAIS DO VII Seminário Científico Sobre Agricultura Familiar 2018
+PESQUISA CIENTÍFICA
+
+...
+Emails encontrados na página 23: []
+
+--- PÁGINA 24 ---
+22  |  ANAIS DO VII Seminário Cientifico sobre Agricultura Familiar 2018
+ACOMPANHAMENTO ADMINSTRATIVO NA 
+COOPERATIVA DE PRODUÇÃO AGROINDUSTRIAL 
+FAMILIAR DO SUDOESTE GOIANO EM JATAÍ-GO 
+SEIFERT. R. J. L.1; ROSENBURG, J. A.¹; 
+SANTOS, G. A. S.2; COSTA, L. A. S.3
+Um facilitador para os produtores que estão na categoria de propriedade familiar, 
+é a integralização em cooperativas agroindustriais que fortificam o poder de com-
+pra da matéria-prima e venda dos itens produzidos pelas famílias, gerando maior 
+rotatividade de produtos agroindustriais. Este trabalho tem por objetivo retratar 
+a experiência de consultoria na condução das rotinas administrativas realizadas na 
+Cooperativa de Produção Agroindustrial Familiar do Sudoeste Goiano (Coopfas) 
+situada no Município de Jataí. Foram realizadas visitas semanais, por integrantes 
+do projeto de extensão PROSOL/INCUBADORA ADJUNTA TECNOLÓGI-
+CA DE COOPERATIVAS POPULARES E NEGÓCIOS SOCIAIS da Univer-
+sidade Estadual de Goiás, campus-Jataí, cont
+...
+Emails encontrados na página 24: []
+
+--- PÁGINA 25 ---
+ANAIS DO VII Seminário Cientifico sobre Agricultura Familiar 2018  |  23 
+A FINANCEIRIZAÇÃO DA AGRICULTURA E A NOVA 
+DINÂMICA DO SISTEMA AGROALIMENTAR
+ROCHA, R. G1.
+Várias são as implicações políticas e econômicas da financeirização da agricultura, 
+destacando o distanciamento da produção e o consumo de alimentos, o aumento 
+significativo de atores envolvidos nas cadeias de produtos agroalimentares globais, 
+a eliminação de fronteiras, pouco ou nenhum controle do Estado, dentre outros 
+fatores que vêm incentivando investidores a trocar o capital fixo por investimen-
+tos financeiros de maior liquidez, o que facilita as especulações financeiras. Por 
+meio de revisão bibliográfica este trabalho buscou entender o processo da finan-
+ceirização da agricultura e suas consequências para o sistema agroalimentar. Nesse 
+entendimento, a proposta foi conhecer algumas implicações da financeirização 
+da agricultura, buscando responder as suas consequências para os sistemas agroa-
+limentares que vêm 
+...
+Emails encontrados na página 25: []

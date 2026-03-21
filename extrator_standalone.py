@@ -157,16 +157,14 @@ NUNCA OMITA UM AUTOR. Se há 5 nomes listados, devem haver 5 linhas.
 _gemini_model_cache = {}
 _model_blacklist: set = set()  # modelos que retornaram 404 em runtime
 
-# Rate limiting proativo: máx 4 requests simultâneos + 1.5s de espaçamento entre releases.
-# Evita bursts e elimina os travamentos de 60s causados pelo 429 reativo.
-_api_semaphore = threading.Semaphore(4)
-_API_SPACING = 1.5  # segundos de espaçamento entre liberações do semáforo
+# Rate limiting proativo: máx 3 requests simultâneos + 4.2s de espaçamento.
+# Garante 14.2 Requests Por Minuto (RPM), o que é abaixo do limite Free (15 RPM)
+# Assim, o cliente pode até usar de graça sem gastar nem os 23 reais.
+_api_semaphore = threading.Semaphore(3)
+_API_SPACING = 4.2  
 
 def _get_gemini_model(api_key):
-    """Descobre o melhor modelo Flash UMA VEZ e cacheia.
-    Filtra por supportedGenerationMethods para garantir que o modelo
-    realmente aceita generateContent (evita 404 em runtime)."""
-    # Invalida cache se o modelo cacheado foi para blacklist
+    """Descobre o melhor modelo Flash UMA VEZ e cacheia."""
     if api_key in _gemini_model_cache and _gemini_model_cache[api_key] in _model_blacklist:
         del _gemini_model_cache[api_key]
 
@@ -176,22 +174,21 @@ def _get_gemini_model(api_key):
     models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     resp_models = requests.get(models_url, timeout=15)
     if resp_models.status_code != 200:
-        raise Exception(f"Erro ao validar a chave da API do Gemini (HTTP {resp_models.status_code}): {resp_models.text}")
+        raise Exception(f"Erro ao validar a chave API (HTTP {resp_models.status_code})")
         
-    # Filtra apenas modelos que suportam generateContent e não estão na blacklist
     available_models = [
         m.get('name') for m in resp_models.json().get('models', [])
         if 'generateContent' in m.get('supportedGenerationMethods', [])
         and m.get('name') not in _model_blacklist
     ]
     
-    # Prioridade: modelos capazes para extração complexa (lite só como último recurso)
+    # Prioridade focada TOTAL na economia: Flash Lite é de 50% a 70% mais barato!
     PREFERRED = [
-        "models/gemini-2.5-flash",                # ← PRIMEIRA OPÇÃO: melhor custo-benefício para extração
-        "models/gemini-2.5-flash-preview-05-20",  # fallback: 2.5 Flash Preview
-        "models/gemini-2.0-flash-001",            # fallback: 2.0 Flash padrão
-        "models/gemini-flash-latest",             # fallback: alias genérico
-        "models/gemini-2.0-flash-lite",           # último recurso (baixa qualidade para extração)
+        "models/gemini-2.0-flash-lite-preview-02-05", # O modelo mais barato e rápido do Google
+        "models/gemini-2.0-flash-lite",               # Fallback para versão final do Lite
+        "models/gemini-2.0-flash",                    # Flash 2.0 (mais barato que o 2.5)
+        "models/gemini-2.5-flash",                    # Flash 2.5
+        "models/gemini-flash-latest"                  # Genérico
     ]
     target_model = None
     for pref in PREFERRED:
@@ -204,7 +201,7 @@ def _get_gemini_model(api_key):
         if flash_models:
             target_model = flash_models[0]
         else:
-            raise Exception(f"Nenhum modelo 'Flash' encontrado na sua conta. Modelos disponíveis na chave: {available_models}")
+            raise Exception(f"Nenhum modelo Flash encontrado na chave: {available_models}")
     
     _gemini_model_cache[api_key] = target_model
     return target_model

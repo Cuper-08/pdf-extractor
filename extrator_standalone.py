@@ -221,7 +221,9 @@ def extract_from_gemini(text_content, api_key):
         }
     }
     
-    response = requests.post(url, headers=headers, json=payload, timeout=120)
+    # Timeout de 400 segundos: blocos de Índice/Sumário contam com CENTENAS de trabalhos
+    # e a IA pode levar 3 ou 4 minutos inteiros só para formatar essa saída gigante no modelo 1.5.
+    response = requests.post(url, headers=headers, json=payload, timeout=400)
     if response.status_code == 404:
         # Modelo indisponível para esta chave — adiciona à blacklist e força redescoberta
         _model_blacklist.add(target_model)
